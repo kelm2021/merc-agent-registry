@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const { x402Gate } = require('./x402');
 
 const app = express();
 app.use(cors());
@@ -33,11 +34,11 @@ function loadRegistry() {
   ];
 }
 
-// GET /agents — paginated list (free tier: top 10, paid: full)
-app.get('/agents', async (req, res) => {
+// GET /agents — paginated list (free tier: top 10, paid: full via x402)
+app.get('/agents', x402Gate, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
-    const paid = req.headers['x-payment-verified'] === 'true'; // x402 middleware sets this
+    const paid = req.x402?.paid || false;
     const maxResults = paid ? Math.min(limit, 200) : 10;
 
     // Pull live MERC balances for registered agents
