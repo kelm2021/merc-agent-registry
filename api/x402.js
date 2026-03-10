@@ -77,8 +77,9 @@ async function x402Gate(req, res, next) {
   const walletAddress = req.headers['x-wallet-address'] || req.query.wallet;
   const requestedLimit = parseInt(req.query.limit) || 10;
 
-  // Free tier: <= 10 results
-  if (requestedLimit <= 10 && !req.query.full) {
+  // Free tier: no explicit limit param and no ?full flag
+  const hasExplicitLimit = req.query.limit !== undefined;
+  if (!hasExplicitLimit && !req.query.full) {
     req.x402 = { paid: false, freeTier: true };
     return next();
   }
