@@ -1,0 +1,15 @@
+{
+  "name": "merc-agent-registry",
+  "version": "0.1.0",
+  "description": "MERC AI Agent Registry — EAS + x402 + Blockscout",
+  "main": "api/index.js",
+  "scripts": {
+    "dev": "node api/index.js",
+    "build": "echo 'No build step'"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0",
+    "cors": "^2.8.5"
+  }
+}
