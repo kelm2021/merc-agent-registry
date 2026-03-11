@@ -8,6 +8,7 @@
     "build": "echo 'No build step'"
   },
   "dependencies": {
+    "@coinbase/cdp-sdk": "^1.45.0",
     "@x402/core": "^2.6.0",
     "@x402/evm": "^2.6.0",
     "@x402/express": "^2.6.0",
