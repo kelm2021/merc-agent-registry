@@ -30,6 +30,18 @@ function loadRegistry() {
       registeredAt: '2026-03-10T22:49:00.000Z',
       mercBalance: 5924,
       agentNumber: 1
+    },
+    {
+      address: '0xEa8F59B504F18Ac7ed25C735f07864ae2EeFa493',
+      agentName: 'ClawOps',
+      agentType: 'Operations & Analytics',
+      modelProvider: 'Anthropic Claude',
+      operatorHandle: 'LMercdigital',
+      githubOrTwitter: '@lmercdigital',
+      attestationUid: '0xc925561d4caee32551ea47a640c3dc4e4cdcc5960bdbcbc62f285d9664f48346',
+      registeredAt: '2026-03-11T00:09:00.000Z',
+      mercBalance: 0,
+      agentNumber: 2
     }
   ];
 }
