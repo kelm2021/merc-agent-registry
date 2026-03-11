@@ -113,8 +113,9 @@ const agentsFullPaymentConfig = {
 };
 
 // Apply official x402 payment middleware
-// syncFacilitatorOnStart=false: don't block cold start with async network call
-// Vercel serverless functions can't do async module-level init
+// syncFacilitatorOnStart=false: skip facilitator sync at startup
+// Vercel cold start cannot handle blocking network calls at module init
+// Payment verification still works — facilitator is contacted per-request during verify/settle
 const httpServer = new x402HTTPResourceServer(resourceServer, agentsFullPaymentConfig);
 app.use(paymentMiddleware(agentsFullPaymentConfig, resourceServer, undefined, undefined, false));
 
