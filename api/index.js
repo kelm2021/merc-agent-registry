@@ -113,8 +113,10 @@ const agentsFullPaymentConfig = {
 };
 
 // Apply official x402 payment middleware
+// syncFacilitatorOnStart=false: don't block cold start with async network call
+// Vercel serverless functions can't do async module-level init
 const httpServer = new x402HTTPResourceServer(resourceServer, agentsFullPaymentConfig);
-app.use(paymentMiddleware(agentsFullPaymentConfig, resourceServer));
+app.use(paymentMiddleware(agentsFullPaymentConfig, resourceServer, undefined, undefined, false));
 
 // ─── Registry data ─────────────────────────────────────────────────────────────
 let agentRegistry = loadRegistry();
