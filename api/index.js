@@ -7,6 +7,9 @@ const { ExactEvmScheme } = require('@x402/evm/exact/server');
 const { bazaarResourceServerExtension, declareDiscoveryExtension } = require('@x402/extensions');
 
 const app = express();
+// Trust proxy headers from Vercel — ensures req.protocol returns 'https' not 'http'
+// This fixes the resource URL in x402 402 responses
+app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
 
