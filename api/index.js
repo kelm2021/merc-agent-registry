@@ -52,25 +52,39 @@ const facilitatorUrl = cdpKeyId
   ? 'https://api.cdp.coinbase.com/platform/v2/x402'
   : (process.env.CDP_FACILITATOR_URL || 'https://facilitator.openx402.ai');
 
+// HTTPFacilitatorClient calls createAuthHeaders() with NO args, then does authHeaders[path]
+// where path is "verify", "settle", or "supported". We must return { verify: {...}, settle: {...}, supported: {...} }
+async function buildCdpAuthHeadersMap() {
+  if (!cdpKeyId || !cdpSecret) return {};
+  try {
+    const { generateJwt } = require('./node_modules/@coinbase/cdp-sdk/_cjs/auth/utils/jwt.js');
+    const paths = [
+      { key: 'verify',    method: 'POST', path: '/platform/v2/x402/verify' },
+      { key: 'settle',    method: 'POST', path: '/platform/v2/x402/settle' },
+      { key: 'supported', method: 'GET',  path: '/platform/v2/x402/supported' }
+    ];
+    const result = {};
+    await Promise.all(paths.map(async ({ key, method, path }) => {
+      const jwt = await generateJwt({
+        apiKeyId: cdpKeyId,
+        apiKeySecret: cdpSecret,
+        requestMethod: method,
+        requestHost: 'api.cdp.coinbase.com',
+        requestPath: path
+      });
+      result[key] = { Authorization: 'Bearer ' + jwt };
+    }));
+    return result;
+  } catch(e) {
+    console.error('CDP JWT map error:', e.message);
+    return {};
+  }
+}
+
 const facilitatorClient = new HTTPFacilitatorClient({
   url: facilitatorUrl,
   ...(cdpKeyId && cdpSecret ? {
-    createAuthHeaders: async (method, path) => {
-      try {
-        const { generateJwt } = require('./node_modules/@coinbase/cdp-sdk/_cjs/auth/utils/jwt.js');
-        const jwt = await generateJwt({
-          apiKeyId: cdpKeyId,
-          apiKeySecret: cdpSecret,
-          requestMethod: method || 'GET',
-          requestHost: 'api.cdp.coinbase.com',
-          requestPath: path || '/platform/v2/x402/supported'
-        });
-        return { Authorization: 'Bearer ' + jwt };
-      } catch(e) {
-        console.error('CDP JWT error:', e.message);
-        return {};
-      }
-    }
+    createAuthHeaders: buildCdpAuthHeadersMap
   } : {})
 });
 
@@ -192,44 +206,33 @@ function getPaymentRequiredHeader() {
 }
 
 // ─── Direct verify/settle with timeout (avoids blocking middleware init) ──────
-async function verifyCdpPayment(paymentHeader) {
-  const VERIFY_TIMEOUT = 8000; // 8s — Vercel function limit is 10s
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT);
+// HTTPFacilitatorClient.verify(paymentPayload, paymentRequirements) — no signal support
+// Use Promise.race for timeout instead of AbortController
+function withTimeout(promise, ms, label) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  );
+  return Promise.race([promise, timeout]);
+}
 
-  try {
-    const paymentReqs = PAYMENT_REQUIREMENTS.accepts[0];
-    const result = await facilitatorClient.verify(
-      JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8')),
-      paymentReqs,
-      { signal: controller.signal }
-    );
-    clearTimeout(timer);
-    return result;
-  } catch (e) {
-    clearTimeout(timer);
-    throw e;
-  }
+async function verifyCdpPayment(paymentHeader) {
+  const paymentReqs = PAYMENT_REQUIREMENTS.accepts[0];
+  const paymentPayload = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'));
+  return withTimeout(
+    facilitatorClient.verify(paymentPayload, paymentReqs),
+    8000,
+    'CDP verify'
+  );
 }
 
 async function settleCdpPayment(paymentHeader) {
-  const SETTLE_TIMEOUT = 8000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SETTLE_TIMEOUT);
-
-  try {
-    const paymentReqs = PAYMENT_REQUIREMENTS.accepts[0];
-    const result = await facilitatorClient.settle(
-      JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8')),
-      paymentReqs,
-      { signal: controller.signal }
-    );
-    clearTimeout(timer);
-    return result;
-  } catch (e) {
-    clearTimeout(timer);
-    throw e;
-  }
+  const paymentReqs = PAYMENT_REQUIREMENTS.accepts[0];
+  const paymentPayload = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'));
+  return withTimeout(
+    facilitatorClient.settle(paymentPayload, paymentReqs),
+    8000,
+    'CDP settle'
+  );
 }
 
 app.use('/api/agents/full', async (req, res, next) => {
