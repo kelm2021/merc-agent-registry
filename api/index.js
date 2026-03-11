@@ -158,10 +158,11 @@ const agentsFullPaymentConfig = {
 // We short-circuit unpaid requests with a pre-built 402 response,
 // and only invoke the official middleware (which hits the facilitator) when
 // a payment header is present (i.e., an actual payment attempt).
-// x402Version:1 body format — accepted by current @x402/axios client
-// v2 requires a base64-encoded PAYMENT-REQUIRED header; v1 uses body only
+// x402Version:2 — the current @x402/evm ExactEvmScheme only handles v2
+// Delivery: base64-encoded PAYMENT-REQUIRED header (required for v2)
+// Body: same object with x402Version:2 (for clients that read body)
 const PAYMENT_REQUIREMENTS = {
-  x402Version: 1,
+  x402Version: 2,
   accepts: [{
     scheme: 'exact',
     network: BASE_MAINNET,
@@ -181,7 +182,7 @@ const PAYMENT_REQUIREMENTS = {
   }]
 };
 
-// Also build the base64 PAYMENT-REQUIRED header for v2 clients
+// base64-encode for the PAYMENT-REQUIRED header (v2 spec)
 function getPaymentRequiredHeader() {
   return Buffer.from(JSON.stringify(PAYMENT_REQUIREMENTS)).toString('base64');
 }
