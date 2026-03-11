@@ -1,10 +1,10 @@
 /**
  * MERC Agent Registry — x402 Test Payment Client
  *
- * Runs one real paid request against /api/agents/full.
- * A successful payment through facilitator.openx402.ai triggers Bazaar indexing.
+ * Runs one real paid request against /api/agents/full via CDP facilitator.
+ * A successful payment triggers Bazaar indexing on CDP discovery.
  *
- * Prerequisites (run once):
+ * Prerequisites (run once in this directory):
  *   npm install @x402/axios @x402/evm viem
  *
  * Usage:
@@ -38,6 +38,7 @@ async function main() {
   console.log('━'.repeat(50));
   console.log('Endpoint:', PAID_ENDPOINT);
   console.log('Price:    $0.01 USDC on Base');
+  console.log('Facilitator: CDP (api.cdp.coinbase.com)');
   console.log('');
 
   // Set up signer
@@ -61,8 +62,8 @@ async function main() {
     console.log('━'.repeat(50));
     console.log(JSON.stringify(response.data, null, 2));
     console.log('━'.repeat(50));
-    console.log('\n🎯 Bazaar indexing triggered via facilitator.openx402.ai');
-    console.log('   Check discovery: https://facilitator.openx402.ai/discovery/resources');
+    console.log('\n🎯 Bazaar indexing triggered via CDP facilitator');
+    console.log('   Check discovery: https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources');
   } catch (err) {
     if (err.response) {
       console.error('\n❌ Request failed:', err.response.status);
