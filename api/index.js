@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const { paymentMiddleware, x402ResourceServer, x402HTTPResourceServer } = require('@x402/express');
+const { x402ResourceServer } = require('@x402/express');
 const { HTTPFacilitatorClient } = require('@x402/core/server');
 const { ExactEvmScheme } = require('@x402/evm/exact/server');
 const { bazaarResourceServerExtension, declareDiscoveryExtension } = require('@x402/extensions');
@@ -180,19 +180,76 @@ const PAYMENT_REQUIREMENTS = {
   }]
 };
 
-app.use('/api/agents/full', (req, res, next) => {
+// ─── Direct verify/settle with timeout (avoids blocking middleware init) ──────
+async function verifyCdpPayment(paymentHeader) {
+  const VERIFY_TIMEOUT = 8000; // 8s — Vercel function limit is 10s
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT);
+
+  try {
+    const paymentReqs = PAYMENT_REQUIREMENTS.accepts[0];
+    const result = await facilitatorClient.verify(
+      JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8')),
+      paymentReqs,
+      { signal: controller.signal }
+    );
+    clearTimeout(timer);
+    return result;
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+}
+
+async function settleCdpPayment(paymentHeader) {
+  const SETTLE_TIMEOUT = 8000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SETTLE_TIMEOUT);
+
+  try {
+    const paymentReqs = PAYMENT_REQUIREMENTS.accepts[0];
+    const result = await facilitatorClient.settle(
+      JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8')),
+      paymentReqs,
+      { signal: controller.signal }
+    );
+    clearTimeout(timer);
+    return result;
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+}
+
+app.use('/api/agents/full', async (req, res, next) => {
   const paymentHeader = req.headers['x-payment'] || req.headers['payment-signature'];
   if (!paymentHeader) {
     // No payment — return fast 402 without hitting facilitator
     return res.status(402).json(PAYMENT_REQUIREMENTS);
   }
-  // Payment header present — pass to official middleware for verification
-  next();
-});
 
-// Apply official x402 payment middleware (only reached when payment header present)
-const httpServer = new x402HTTPResourceServer(resourceServer, agentsFullPaymentConfig);
-app.use(paymentMiddleware(agentsFullPaymentConfig, resourceServer, undefined, undefined, false));
+  // Payment header present — verify directly with facilitator (with timeout)
+  try {
+    const verifyResult = await verifyCdpPayment(paymentHeader);
+    if (!verifyResult?.isValid) {
+      return res.status(402).json({
+        ...PAYMENT_REQUIREMENTS,
+        error: verifyResult?.invalidReason || 'payment_invalid'
+      });
+    }
+    // Verified — attach for settle after response
+    req.x402PaymentHeader = paymentHeader;
+    req.x402Verified = true;
+    next();
+  } catch (e) {
+    console.error('Payment verify error:', e.message);
+    // On facilitator timeout/error, fail open with a 402 to be safe
+    return res.status(402).json({
+      ...PAYMENT_REQUIREMENTS,
+      error: 'facilitator_unavailable'
+    });
+  }
+});
 
 // ─── Registry data ─────────────────────────────────────────────────────────────
 let agentRegistry = loadRegistry();
@@ -325,7 +382,7 @@ app.post('/agents/register', async (req, res) => {
   res.json({ message: 'Agent registered', entry });
 });
 
-// ─── Route: Paid full registry (runs after x402 middleware verifies payment) ──
+// ─── Route: Paid full registry (reached after payment verified in middleware) ──
 app.get('/api/agents/full', async (req, res) => {
   const agents = await Promise.all(
     agentRegistry.map(async (a) => {
@@ -347,6 +404,13 @@ app.get('/api/agents/full', async (req, res) => {
     easExplorer: `https://base.easscan.org/schema/view/${EAS_SCHEMA_UID}`,
     agents
   });
+
+  // Fire-and-forget settle after response is sent
+  if (req.x402PaymentHeader && req.x402Verified) {
+    settleCdpPayment(req.x402PaymentHeader).catch(e => {
+      console.error('Settle error (non-fatal):', e.message);
+    });
+  }
 });
 
 // ─── Schema info ──────────────────────────────────────────────────────────────

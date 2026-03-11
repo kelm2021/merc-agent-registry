@@ -5,7 +5,7 @@
  * A successful payment triggers Bazaar indexing on CDP discovery.
  *
  * Prerequisites (run once in this directory):
- *   npm install @x402/axios @x402/evm viem
+ *   npm install @x402/axios @x402/evm viem axios
  *
  * Usage:
  *   PRIVATE_KEY=0x... node test-payment.js
@@ -17,7 +17,8 @@
  * SECURITY: Use a dedicated hot wallet with minimal funds. Never use your main wallet.
  */
 
-const { createX402AxiosClient } = require('@x402/axios');
+const axios = require('axios');
+const { wrapAxiosWithPayment } = require('@x402/axios');
 const { ExactEvmScheme, toClientEvmSigner } = require('@x402/evm');
 const { privateKeyToAccount } = require('viem/accounts');
 const { createPublicClient, http } = require('viem');
@@ -48,15 +49,16 @@ async function main() {
   const publicClient = createPublicClient({ chain: base, transport: http() });
   const signer = toClientEvmSigner(account, publicClient);
 
-  // Create x402-aware axios client
-  const client = createX402AxiosClient({
+  // Create x402-aware axios client using current API
+  const axiosInstance = axios.create({ timeout: 30000 });
+  wrapAxiosWithPayment(axiosInstance, {
     schemes: [new ExactEvmScheme(signer)],
   });
 
   console.log('\nSending paid request...');
 
   try {
-    const response = await client.get(PAID_ENDPOINT);
+    const response = await axiosInstance.get(PAID_ENDPOINT);
     
     console.log('\n✅ Payment successful! Response:');
     console.log('━'.repeat(50));
