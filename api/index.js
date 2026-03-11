@@ -18,7 +18,9 @@ const MERC_BASE = '0x8923947EAfaf4aD68F1f0C9eb5463eC876D79058';
 const BLOCKSCOUT_BASE = 'https://base.blockscout.com/api/v2';
 const EAS_SCHEMA_UID = '0xd23bf1c0bc1b08d7b88f990f0e3c39721c40d897eef77355b6ac9f16cafe187d';
 const MERC_FREE_THRESHOLD = 100;
-const PAYMENT_RECEIVER = '0xC1ce2f3fc018EB304Fa178BDDFFf0E5664Fa6B64';
+// ClawOps EOA — signing wallet, usable for openx402 seller registration
+// (CDP wallet 0xC1ce2f3fc018EB304Fa178BDDFFf0E5664Fa6B64 is custodial, can't sign for registration)
+const PAYMENT_RECEIVER = '0xEa8F59B504F18Ac7ed25C735f07864ae2EeFa493';
 const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const BASE_MAINNET = 'eip155:8453';
 const CANONICAL_PAID_URL = 'https://merc-agent-registry-lake.vercel.app/api/agents/full';
