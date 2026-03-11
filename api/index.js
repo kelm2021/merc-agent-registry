@@ -174,12 +174,10 @@ const PAYMENT_REQUIREMENTS = {
     payTo: PAYMENT_RECEIVER,
     maxTimeoutSeconds: 300,
     asset: USDC_BASE,
-    // EIP-712 domain for USDC on Base — required by ExactEvmScheme client
-    // name/version are the token contract's EIP-712 domain parameters
-    name: 'USD Coin',
-    version: '2',
     extra: {
-      description: 'MERC Agent Registry',
+      // EIP-712 domain for USDC on Base — client reads from extra.name / extra.version
+      name: 'USD Coin',
+      version: '2',
       mercFreeAccess: `Hold ${MERC_FREE_THRESHOLD}+ MERC at /agents/merc?wallet=0x...`,
       mercContract: MERC_BASE,
       easSchema: EAS_SCHEMA_UID
