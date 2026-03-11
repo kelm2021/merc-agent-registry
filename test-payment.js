@@ -5,7 +5,7 @@
  * A successful payment triggers Bazaar indexing on CDP discovery.
  *
  * Prerequisites (run once in this directory):
- *   npm install @x402/axios @x402/evm viem axios
+ *   npm install @x402/axios @x402/evm @x402/core viem axios
  *
  * Usage:
  *   PRIVATE_KEY=0x... node test-payment.js
@@ -18,8 +18,9 @@
  */
 
 const axios = require('axios');
-const { wrapAxiosWithPayment } = require('@x402/axios');
-const { ExactEvmScheme, toClientEvmSigner } = require('@x402/evm');
+const { wrapAxiosWithPayment, x402Client } = require('@x402/axios');
+const { toClientEvmSigner } = require('@x402/evm');
+const { registerExactEvmScheme } = require('@x402/evm/exact/client');
 const { privateKeyToAccount } = require('viem/accounts');
 const { createPublicClient, http } = require('viem');
 const { base } = require('viem/chains');
@@ -49,11 +50,13 @@ async function main() {
   const publicClient = createPublicClient({ chain: base, transport: http() });
   const signer = toClientEvmSigner(account, publicClient);
 
-  // Create x402-aware axios client using current API
+  // Build x402Client and register ExactEvmScheme for all EVM networks (including 'base')
+  const client = new x402Client();
+  registerExactEvmScheme(client, { signer });
+
+  // Wrap axios with x402 payment handling
   const axiosInstance = axios.create({ timeout: 30000 });
-  wrapAxiosWithPayment(axiosInstance, {
-    schemes: [new ExactEvmScheme(signer)],
-  });
+  wrapAxiosWithPayment(axiosInstance, client);
 
   console.log('\nSending paid request...');
 

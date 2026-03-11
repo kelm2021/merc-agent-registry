@@ -22,8 +22,9 @@ const MERC_FREE_THRESHOLD = 100;
 // (CDP wallet 0xC1ce2f3fc018EB304Fa178BDDFFf0E5664Fa6B64 is custodial, can't sign for registration)
 const PAYMENT_RECEIVER = '0xEa8F59B504F18Ac7ed25C735f07864ae2EeFa493';
 const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-// CDP facilitator uses 'base' network identifier (v1); openx402.ai uses 'eip155:8453' (v2)
-const BASE_MAINNET = process.env.CDP_API_KEY_ID ? 'base' : 'eip155:8453';
+// Use CAIP-2 format 'eip155:8453' — works with both CDP and openx402.ai facilitators
+// ExactEvmScheme client registers for 'eip155:*' which wildcards this
+const BASE_MAINNET = 'eip155:8453';
 const CANONICAL_PAID_URL = 'https://merc-agent-registry-lake.vercel.app/api/agents/full';
 
 // ─── CDP JWT auth helper ──────────────────────────────────────────────────────
