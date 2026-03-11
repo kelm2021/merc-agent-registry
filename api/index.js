@@ -167,7 +167,8 @@ const PAYMENT_REQUIREMENTS = {
   accepts: [{
     scheme: 'exact',
     network: BASE_MAINNET,
-    maxAmountRequired: '10000', // $0.01 USDC (6 decimals)
+    maxAmountRequired: '10000', // $0.01 USDC (6 decimals) — for facilitator
+    amount: '10000', // $0.01 USDC — read by ExactEvmScheme client for EIP-3009
     resource: CANONICAL_PAID_URL,
     description: 'Full MERC AI Agent Registry — all agents with live balances and EAS attestations',
     mimeType: 'application/json',
