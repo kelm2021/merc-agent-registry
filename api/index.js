@@ -112,10 +112,45 @@ const agentsFullPaymentConfig = {
   }
 };
 
-// Apply official x402 payment middleware
-// syncFacilitatorOnStart=false: skip facilitator sync at startup
-// Vercel cold start cannot handle blocking network calls at module init
-// Payment verification still works — facilitator is contacted per-request during verify/settle
+// ─── Fast 402 interceptor for Vercel ─────────────────────────────────────────
+// The official x402 middleware calls facilitator.getSupported() on EVERY request
+// (to build the 402 response), which times out in Vercel's serverless environment.
+// We short-circuit unpaid requests with a pre-built 402 response,
+// and only invoke the official middleware (which hits the facilitator) when
+// a payment header is present (i.e., an actual payment attempt).
+const PAYMENT_REQUIREMENTS = {
+  x402Version: 2,
+  accepts: [{
+    scheme: 'exact',
+    network: BASE_MAINNET,
+    maxAmountRequired: '10000', // $0.01 USDC (6 decimals)
+    resource: `${CANONICAL_PAID_URL}`,
+    description: 'Full MERC AI Agent Registry — all agents with live balances and EAS attestations',
+    mimeType: 'application/json',
+    payTo: PAYMENT_RECEIVER,
+    maxTimeoutSeconds: 300,
+    asset: USDC_BASE,
+    extra: {
+      name: 'MERC Agent Registry',
+      version: '2',
+      mercFreeAccess: `Hold ${MERC_FREE_THRESHOLD}+ MERC at /agents/merc?wallet=0x...`,
+      mercContract: MERC_BASE,
+      easSchema: EAS_SCHEMA_UID
+    }
+  }]
+};
+
+app.use('/api/agents/full', (req, res, next) => {
+  const paymentHeader = req.headers['x-payment'] || req.headers['payment-signature'];
+  if (!paymentHeader) {
+    // No payment — return fast 402 without hitting facilitator
+    return res.status(402).json(PAYMENT_REQUIREMENTS);
+  }
+  // Payment header present — pass to official middleware for verification
+  next();
+});
+
+// Apply official x402 payment middleware (only reached when payment header present)
 const httpServer = new x402HTTPResourceServer(resourceServer, agentsFullPaymentConfig);
 app.use(paymentMiddleware(agentsFullPaymentConfig, resourceServer, undefined, undefined, false));
 
