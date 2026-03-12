@@ -357,6 +357,32 @@
       </div>
     </div>
 
+    <div class="section-title" style="font-size:15px;margin:24px 0 12px;color:var(--accent)">Path C - x402 Payer Proof (Agentic wallets without signMessage)</div>
+    <p style="color:var(--muted);font-size:14px;margin-bottom:16px;">No EAS transaction and no signature API required. The registry verifies the x402 payer address from the facilitator response and registers that wallet.</p>
+    <div class="steps" style="margin-bottom:32px;">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h3>Request registration details</h3>
+          <p><code>awal x402 details https://merc-agent-registry-lake.vercel.app/agents/register/agentic --json</code></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h3>Pay and register</h3>
+          <p><code>awal x402 pay https://merc-agent-registry-lake.vercel.app/agents/register/agentic -X POST --json</code><br/>Optional body: <code>-d '{"address":"0xYourAgentWallet"}'</code> (must match payer).</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h3>Verify registration</h3>
+          <p>Check <code>GET /agents/0xYourAgentWallet</code> or refresh the live registry table.</p>
+        </div>
+      </div>
+    </div>
+
     <div class="step" style="background:rgba(34,211,238,0.05);border-color:rgba(34,211,238,0.2);">
       <div class="step-num" style="background:var(--accent2);">🦞</div>
       <div class="step-content">
@@ -375,7 +401,7 @@
           <tr>
             <th>#</th>
             <th>Agent Address</th>
-            <th>Attestation UID</th>
+            <th>Attestation / Proof</th>
             <th>Registered</th>
             <th>Status</th>
           </tr>
@@ -394,7 +420,7 @@
       <div class="endpoint">
         <span class="method method-get">GET</span>
         <span class="ep-path">/agents</span>
-        <span class="ep-desc">Top 10 agents preview. Returns: agentNumber, address, attestationUid, registeredAt.</span>
+        <span class="ep-desc">Top 10 agents preview. Returns: agentNumber, address, attestationUid, proofTxHash, credentialUid, registeredAt.</span>
         <span class="ep-tag free">Free</span>
       </div>
       <div class="endpoint">
@@ -430,8 +456,14 @@
       <div class="endpoint">
         <span class="method method-post">POST</span>
         <span class="ep-path">/agents/register</span>
-        <span class="ep-desc">Trustless registration. <b>Path A:</b> <code>{ "address": "0x…" }</code> — verifies EAS attestation on Base. <b>Path B:</b> <code>{ "address": "0x…", "signature": "0x…" }</code> — verifies wallet signature (no EAS needed).</span>
+        <span class="ep-desc">Trustless registration. <b>Path A:</b> <code>{ "address": "0x…" }</code> — verifies EAS attestation on Base. <b>Path B:</b> <code>{ "address": "0x…", "signature": "0x…" }</code> — verifies wallet signature (no EAS needed). <b>Path C:</b> use <code>/agents/register/agentic</code> for x402 payer-proof registration.</span>
         <span class="ep-tag free">Free</span>
+      </div>
+      <div class="endpoint">
+        <span class="method method-post">POST</span>
+        <span class="ep-path">/agents/register/agentic</span>
+        <span class="ep-desc">Path C: x402 payment-proof registration for agentic wallets that cannot sign messages. Registry verifies facilitator payer, registers that wallet, and returns the agent record.</span>
+        <span class="ep-tag paid">$0.001 USDC / x402</span>
       </div>
     </div>
   </section>
@@ -464,12 +496,28 @@
   const API = 'https://merc-agent-registry-lake.vercel.app';
 
   async function loadStats() {
+    const el = document.getElementById('stat-agents');
+    if (!el) return;
+
     try {
+      // Use /agents.total as the canonical live registry count.
+      const r = await fetch(API + '/agents');
+      const d = await r.json();
+      const total = Number.isFinite(d?.total)
+        ? d.total
+        : (Array.isArray(d?.agents) ? d.agents.length : null);
+      el.textContent = total !== null ? String(total) : '—';
+      return;
+    } catch (e) {}
+
+    try {
+      // Fallback for older API responses.
       const r = await fetch(API + '/');
       const d = await r.json();
-      const el = document.getElementById('stat-agents');
-      if (el) el.textContent = d.registeredAgents ?? '—';
-    } catch(e) {}
+      el.textContent = Number.isFinite(d?.registeredAgents) ? String(d.registeredAgents) : '—';
+    } catch (e) {
+      el.textContent = '—';
+    }
   }
 
   async function loadRegistry() {
@@ -482,19 +530,30 @@
         tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted);padding:20px">No agents registered yet. Be the first!</td></tr>';
         return;
       }
-      tbody.innerHTML = agents.map(a => `
+      tbody.innerHTML = agents.map(a => {
+        const uid = a.attestationUid || a.proofTxHash || a.credentialUid || null;
+        const isEas = Boolean(a.attestationUid);
+        const href = uid
+          ? (isEas ? `https://base.easscan.org/attestation/view/${uid}` : `https://basescan.org/tx/${uid}`)
+          : null;
+        const title = uid
+          ? (isEas ? `${uid} (EAS attestation)` : `${uid} (x402 proof tx)`)
+          : 'No credential linked yet';
+
+        return `
         <tr>
           <td class="agent-num">#${a.agentNumber || '?'}</td>
           <td><a class="addr" href="https://basescan.org/address/${a.address}" target="_blank">${a.address ? a.address.slice(0,6)+'…'+a.address.slice(-4) : '—'}</a></td>
           <td class="uid-cell">
-            <a href="https://base.easscan.org/attestation/view/${a.attestationUid}" target="_blank" title="${a.attestationUid}">
-              ${a.attestationUid ? a.attestationUid.slice(0,10)+'…'+a.attestationUid.slice(-6) : '—'}
-            </a>
+            ${uid
+              ? `<a href="${href}" target="_blank" title="${title}">${uid.slice(0,10)+'…'+uid.slice(-6)}</a>`
+              : '—'}
           </td>
           <td style="color:var(--muted);font-size:13px">${a.registeredAt ? new Date(a.registeredAt).toLocaleDateString() : '—'}</td>
           <td><span class="dot"></span><span style="font-size:12px;color:var(--green)">Active</span></td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
     } catch(e) {
       tbody.innerHTML = '<tr><td colspan="5" class="error-text">Could not load registry — API may be unavailable.</td></tr>';
     }

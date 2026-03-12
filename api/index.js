@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const crypto = require('crypto');
+const { createPublicClient, http, parseAbiItem, verifyMessage } = require('viem');
+const { base } = require('viem/chains');
 const { x402ResourceServer } = require('@x402/express');
 const { HTTPFacilitatorClient } = require('@x402/core/server');
 const { ExactEvmScheme } = require('@x402/evm/exact/server');
@@ -27,6 +29,15 @@ const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 // ExactEvmScheme client registers for 'eip155:*' which wildcards this
 const BASE_MAINNET = 'eip155:8453';
 const CANONICAL_PAID_URL = 'https://merc-agent-registry-lake.vercel.app/api/agents/full';
+const CANONICAL_AGENTIC_REGISTER_URL = 'https://merc-agent-registry-lake.vercel.app/agents/register/agentic';
+const EAS_GRAPHQL_ENDPOINT = 'https://base.easscan.org/graphql';
+const BASE_RPC_URLS = (process.env.BASE_RPC_URLS || process.env.BASE_RPC_URL || 'https://base-rpc.publicnode.com,https://1rpc.io/base,https://base-mainnet.public.blastapi.io,https://mainnet.base.org')
+  .split(',')
+  .map(url => url.trim())
+  .filter(Boolean);
+const AGENTIC_REGISTRY_FROM_BLOCK = BigInt(process.env.AGENTIC_REGISTRY_FROM_BLOCK || '43270000');
+const EAS_SCHEMA_HYDRATION_PAGE_SIZE = Number(process.env.EAS_SCHEMA_HYDRATION_PAGE_SIZE || 100);
+const EAS_SCHEMA_HYDRATION_MAX_PAGES = Number(process.env.EAS_SCHEMA_HYDRATION_MAX_PAGES || 20);
 
 // ─── CDP / x402 Facilitator config ───────────────────────────────────────────
 // Canonical env vars (standardized):
@@ -209,9 +220,32 @@ const PAYMENT_REQUIREMENTS = {
   }]
 };
 
+const AGENTIC_REGISTER_PAYMENT_REQUIREMENTS = {
+  x402Version: 2,
+  accepts: [{
+    scheme: 'exact',
+    network: BASE_MAINNET,
+    maxAmountRequired: '1000', // $0.001 USDC
+    amount: '1000',
+    resource: CANONICAL_AGENTIC_REGISTER_URL,
+    description: 'Agentic wallet registration proof — registers the verified x402 payer address',
+    mimeType: 'application/json',
+    payTo: PAYMENT_RECEIVER,
+    maxTimeoutSeconds: 300,
+    asset: USDC_BASE,
+    extra: {
+      name: 'USD Coin',
+      version: '2',
+      registrationPath: 'x402-payment-proof',
+      mercContract: MERC_BASE,
+      easSchema: EAS_SCHEMA_UID
+    }
+  }]
+};
+
 // base64-encode for the PAYMENT-REQUIRED header (v2 spec)
-function getPaymentRequiredHeader() {
-  return Buffer.from(JSON.stringify(PAYMENT_REQUIREMENTS)).toString('base64');
+function getPaymentRequiredHeader(requirements) {
+  return Buffer.from(JSON.stringify(requirements)).toString('base64');
 }
 
 // ─── Direct verify/settle with timeout (avoids blocking middleware init) ──────
@@ -224,24 +258,26 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]);
 }
 
-async function verifyCdpPayment(paymentHeader) {
-  const paymentReqs = PAYMENT_REQUIREMENTS.accepts[0];
+async function verifyCdpPayment(paymentHeader, paymentReqs = PAYMENT_REQUIREMENTS.accepts[0], label = 'CDP verify') {
   const paymentPayload = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'));
   return withTimeout(
     facilitatorClient.verify(paymentPayload, paymentReqs),
     8000,
-    'CDP verify'
+    label
   );
 }
 
-async function settleCdpPayment(paymentHeader) {
-  const paymentReqs = PAYMENT_REQUIREMENTS.accepts[0];
+async function settleCdpPayment(paymentHeader, paymentReqs = PAYMENT_REQUIREMENTS.accepts[0], label = 'CDP settle') {
   const paymentPayload = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'));
   return withTimeout(
     facilitatorClient.settle(paymentPayload, paymentReqs),
     8000,
-    'CDP settle'
+    label
   );
+}
+
+function extractSettleTxHash(settleResult) {
+  return settleResult?.transaction || settleResult?.txHash || settleResult?.hash || null;
 }
 
 app.use('/api/agents/full', async (req, res, next) => {
@@ -249,7 +285,7 @@ app.use('/api/agents/full', async (req, res, next) => {
   if (!paymentHeader) {
     // No payment — return fast 402 without hitting facilitator
     // Send both v1 body (for @x402/axios) and v2 header (for v2 clients)
-    res.setHeader('PAYMENT-REQUIRED', getPaymentRequiredHeader());
+    res.setHeader('PAYMENT-REQUIRED', getPaymentRequiredHeader(PAYMENT_REQUIREMENTS));
     return res.status(402).json(PAYMENT_REQUIREMENTS);
   }
 
@@ -283,16 +319,369 @@ function loadRegistry() {
     {
       address: '0xEaAE848fbD8F88874F5660E3F615a1430EEE5880',
       attestationUid: '0xa5786bfdd05554faf80d255a064565c97ef58b53963e3a9df0313be0edf6c258',
+      proofTxHash: null,
       registeredAt: '2026-03-12T13:17:34.000Z',
       agentNumber: 1
     },
     {
       address: '0xEa8F59B504F18Ac7ed25C735f07864ae2EeFa493',
       attestationUid: '0x7893e2ca7727aa356d7da6c33df2cc2cec386abbf33be0b60e7d02b251a75d50',
+      proofTxHash: null,
       registeredAt: '2026-03-12T13:34:00.000Z',
       agentNumber: 2
     }
   ];
+}
+
+function toAddressKey(address) {
+  return String(address || '').toLowerCase();
+}
+
+function parseIsoToMs(value) {
+  const ms = Date.parse(value || '');
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function sortAndRenumberRegistry() {
+  agentRegistry.sort((a, b) => {
+    const aMs = parseIsoToMs(a.registeredAt);
+    const bMs = parseIsoToMs(b.registeredAt);
+    if (aMs !== bMs) return aMs - bMs;
+    return toAddressKey(a.address).localeCompare(toAddressKey(b.address));
+  });
+  for (let i = 0; i < agentRegistry.length; i += 1) {
+    agentRegistry[i].agentNumber = i + 1;
+  }
+}
+
+const easSchemaRegistrationCache = {
+  entries: [],
+  expiresAt: 0
+};
+const EAS_SCHEMA_CACHE_TTL_MS = 60 * 1000;
+let easSchemaHydrationPromise = null;
+
+const chainRegistrationCache = {
+  entries: [],
+  expiresAt: 0
+};
+const CHAIN_REGISTRY_CACHE_TTL_MS = 60 * 1000;
+const blockTimestampCache = new Map(); // blockNumber(string) -> ISO date
+let chainHydrationPromise = null;
+
+async function fetchEasSchemaRegistrations() {
+  const now = Date.now();
+  if (easSchemaRegistrationCache.entries.length > 0 && now < easSchemaRegistrationCache.expiresAt) {
+    return easSchemaRegistrationCache.entries;
+  }
+
+  const query = `
+    query SchemaAttestations($schemaId: String!, $skip: Int!, $take: Int!) {
+      attestations(
+        where: { schemaId: { equals: $schemaId }, revoked: { equals: false } },
+        orderBy: { time: desc },
+        take: $take,
+        skip: $skip
+      ) {
+        id
+        recipient
+        time
+      }
+    }
+  `;
+
+  const byAddress = new Map();
+  for (let page = 0; page < EAS_SCHEMA_HYDRATION_MAX_PAGES; page += 1) {
+    const skip = page * EAS_SCHEMA_HYDRATION_PAGE_SIZE;
+    const take = EAS_SCHEMA_HYDRATION_PAGE_SIZE;
+    const resp = await axios.post(
+      EAS_GRAPHQL_ENDPOINT,
+      {
+        query,
+        variables: {
+          schemaId: EAS_SCHEMA_UID,
+          skip,
+          take
+        }
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 8000 }
+    );
+
+    const attestations = resp.data?.data?.attestations || [];
+    for (const att of attestations) {
+      const address = toAddressKey(att?.recipient);
+      if (!/^0x[a-f0-9]{40}$/.test(address)) continue;
+      if (byAddress.has(address)) continue; // already have newest due desc ordering
+
+      byAddress.set(address, {
+        address,
+        attestationUid: att?.id || null,
+        proofTxHash: null,
+        registeredAt: att?.time
+          ? new Date(Number(att.time) * 1000).toISOString()
+          : new Date().toISOString()
+      });
+    }
+
+    if (attestations.length < EAS_SCHEMA_HYDRATION_PAGE_SIZE) break;
+  }
+
+  const entries = [...byAddress.values()];
+  easSchemaRegistrationCache.entries = entries;
+  easSchemaRegistrationCache.expiresAt = now + EAS_SCHEMA_CACHE_TTL_MS;
+  return entries;
+}
+
+async function fetchRegistrationTransferLogsForRpc(rpcUrl, transferEvent) {
+  const client = createPublicClient({
+    chain: base,
+    transport: http(rpcUrl, { timeout: 12000 })
+  });
+
+  const latestBlock = await client.getBlockNumber();
+  const chunkSize = BigInt(process.env.AGENTIC_LOG_CHUNK_SIZE || '9500');
+  const logs = [];
+
+  for (let start = AGENTIC_REGISTRY_FROM_BLOCK; start <= latestBlock; start += (chunkSize + 1n)) {
+    const end = start + chunkSize > latestBlock ? latestBlock : start + chunkSize;
+    const chunkLogs = await client.getLogs({
+      address: USDC_BASE,
+      event: transferEvent,
+      args: { to: PAYMENT_RECEIVER },
+      fromBlock: start,
+      toBlock: end
+    });
+    if (chunkLogs.length > 0) logs.push(...chunkLogs);
+  }
+
+  return { client, logs };
+}
+
+async function fetchAgenticRegistrationsFromChain() {
+  const now = Date.now();
+  if (chainRegistrationCache.entries.length > 0 && now < chainRegistrationCache.expiresAt) {
+    return chainRegistrationCache.entries;
+  }
+
+  const transferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
+  const registrationAmount = BigInt(AGENTIC_REGISTER_PAYMENT_REQUIREMENTS.accepts[0].amount);
+  let client = null;
+  let logs = null;
+  let lastError = null;
+
+  for (const rpcUrl of BASE_RPC_URLS) {
+    try {
+      const result = await fetchRegistrationTransferLogsForRpc(rpcUrl, transferEvent);
+      client = result.client;
+      logs = result.logs;
+      break;
+    } catch (e) {
+      lastError = e;
+      console.error('RPC log scan failed:', rpcUrl, e.message);
+    }
+  }
+
+  if (!client || !logs) {
+    throw new Error(`All Base RPC endpoints failed for registration scan: ${lastError?.message || 'unknown error'}`);
+  }
+
+  const registrationLogs = logs
+    .filter(log => log.args?.value === registrationAmount)
+    .sort((a, b) => {
+      if (a.blockNumber !== b.blockNumber) return a.blockNumber < b.blockNumber ? -1 : 1;
+      return Number(a.logIndex || 0n) - Number(b.logIndex || 0n);
+    });
+
+  const uniqueBlockNumbers = [...new Set(registrationLogs.map(log => String(log.blockNumber || '0')))];
+  await Promise.all(uniqueBlockNumbers.map(async (blockNumberStr) => {
+    if (blockTimestampCache.has(blockNumberStr)) return;
+    try {
+      const block = await client.getBlock({ blockNumber: BigInt(blockNumberStr) });
+      blockTimestampCache.set(blockNumberStr, new Date(Number(block.timestamp) * 1000).toISOString());
+    } catch (e) {
+      console.error('Block timestamp lookup error:', blockNumberStr, e.message);
+    }
+  }));
+
+  const seenAddresses = new Set();
+  const entries = [];
+  for (const log of registrationLogs) {
+    const from = toAddressKey(log.args?.from);
+    if (!/^0x[a-f0-9]{40}$/.test(from)) continue;
+    if (seenAddresses.has(from)) continue;
+    seenAddresses.add(from);
+
+    const blockKey = String(log.blockNumber || '0');
+    entries.push({
+      address: from,
+      attestationUid: null,
+      proofTxHash: log.transactionHash || null,
+      registeredAt: blockTimestampCache.get(blockKey) || new Date().toISOString()
+    });
+  }
+
+  chainRegistrationCache.entries = entries;
+  chainRegistrationCache.expiresAt = now + CHAIN_REGISTRY_CACHE_TTL_MS;
+  return entries;
+}
+
+async function hydrateAgentRegistryFromChain() {
+  if (chainHydrationPromise) return chainHydrationPromise;
+
+  chainHydrationPromise = (async () => {
+    try {
+      const chainEntries = await fetchAgenticRegistrationsFromChain();
+      let mutated = false;
+
+      for (const entry of chainEntries) {
+        const key = toAddressKey(entry.address);
+        const existing = agentRegistry.find(a => toAddressKey(a.address) === key);
+        if (!existing) {
+          agentRegistry.push({
+            address: entry.address,
+            attestationUid: entry.attestationUid || null,
+            proofTxHash: entry.proofTxHash || null,
+            registeredAt: entry.registeredAt || new Date().toISOString(),
+            agentNumber: 0
+          });
+          mutated = true;
+          continue;
+        }
+
+        if (!existing.proofTxHash && entry.proofTxHash) {
+          existing.proofTxHash = entry.proofTxHash;
+          mutated = true;
+        }
+        if (!existing.registeredAt && entry.registeredAt) {
+          existing.registeredAt = entry.registeredAt;
+          mutated = true;
+        }
+      }
+
+      if (mutated) sortAndRenumberRegistry();
+    } catch (e) {
+      console.error('Agent registry chain hydration error:', e.message);
+    }
+  })();
+
+  try {
+    await chainHydrationPromise;
+  } finally {
+    chainHydrationPromise = null;
+  }
+}
+
+async function hydrateAgentRegistryFromEasSchema() {
+  if (easSchemaHydrationPromise) return easSchemaHydrationPromise;
+
+  easSchemaHydrationPromise = (async () => {
+    try {
+      const easEntries = await fetchEasSchemaRegistrations();
+      let mutated = false;
+
+      for (const entry of easEntries) {
+        const key = toAddressKey(entry.address);
+        const existing = agentRegistry.find(a => toAddressKey(a.address) === key);
+        if (!existing) {
+          agentRegistry.push({
+            address: entry.address,
+            attestationUid: entry.attestationUid || null,
+            proofTxHash: null,
+            registeredAt: entry.registeredAt || new Date().toISOString(),
+            agentNumber: 0
+          });
+          mutated = true;
+          continue;
+        }
+
+        const entryUid = (entry.attestationUid || '').toLowerCase();
+        const existingUid = (existing.attestationUid || '').toLowerCase();
+        if (entryUid && entryUid !== existingUid) {
+          existing.attestationUid = entry.attestationUid;
+          mutated = true;
+        }
+        if (!existing.registeredAt && entry.registeredAt) {
+          existing.registeredAt = entry.registeredAt;
+          mutated = true;
+        }
+      }
+
+      if (mutated) sortAndRenumberRegistry();
+    } catch (e) {
+      console.error('Agent registry EAS hydration error:', e.message);
+    }
+  })();
+
+  try {
+    await easSchemaHydrationPromise;
+  } finally {
+    easSchemaHydrationPromise = null;
+  }
+}
+
+async function hydrateAgentRegistry() {
+  await hydrateAgentRegistryFromEasSchema();
+  await hydrateAgentRegistryFromChain();
+}
+
+// Track recent EAS lookups so list endpoints don't hammer GraphQL on every request.
+const attestationBackfillCache = new Map(); // address -> lastLookupMs
+const ATTESTATION_BACKFILL_COOLDOWN_MS = 60 * 1000;
+
+async function backfillAttestationUidForEntry(entry, { force = false } = {}) {
+  if (!entry || entry.attestationUid) return false;
+
+  const key = entry.address.toLowerCase();
+  const now = Date.now();
+  const lastLookup = attestationBackfillCache.get(key) || 0;
+  if (!force && now - lastLookup < ATTESTATION_BACKFILL_COOLDOWN_MS) return false;
+
+  attestationBackfillCache.set(key, now);
+  const attestation = await lookupEasAttestation(entry.address);
+  if (!attestation?.uid) return false;
+
+  entry.attestationUid = attestation.uid;
+  if (!entry.registeredAt && attestation.time) {
+    entry.registeredAt = new Date(attestation.time * 1000).toISOString();
+  }
+  return true;
+}
+
+async function backfillMissingAttestationUids(entries, { maxLookups = 10, force = false } = {}) {
+  if (!Array.isArray(entries) || entries.length === 0 || maxLookups <= 0) return 0;
+
+  const targets = entries.filter(e => e && !e.attestationUid).slice(0, maxLookups);
+  if (targets.length === 0) return 0;
+
+  let updated = 0;
+  await Promise.all(targets.map(async (entry) => {
+    try {
+      const didUpdate = await backfillAttestationUidForEntry(entry, { force });
+      if (didUpdate) updated += 1;
+    } catch (e) {
+      console.error('Attestation backfill error:', entry?.address, e.message);
+    }
+  }));
+  return updated;
+}
+
+function toAgentResponse(entry) {
+  const attestationUid = entry.attestationUid || null;
+  const proofTxHash = entry.proofTxHash || null;
+  const credentialUid = attestationUid || proofTxHash || null;
+  const credentialType = attestationUid
+    ? 'eas-attestation'
+    : (proofTxHash ? 'x402-settlement' : null);
+
+  return {
+    address: entry.address,
+    attestationUid,
+    proofTxHash,
+    credentialUid,
+    credentialType,
+    registeredAt: entry.registeredAt,
+    agentNumber: entry.agentNumber
+  };
 }
 
 // ─── Nonce store (in-memory, TTL 10 min) ──────────────────────────────────────
@@ -338,13 +727,12 @@ async function checkMercBalance(address) {
 
 // ─── Route: Free preview (top 10) ─────────────────────────────────────────────
 app.get('/agents', async (req, res) => {
-  const preview = agentRegistry.slice(0, 10).map(a => ({
-    address: a.address,
-    address: a.address,
-    attestationUid: a.attestationUid || null,
-    registeredAt: a.registeredAt,
-    agentNumber: a.agentNumber
-  }));
+  await hydrateAgentRegistry();
+
+  // Keep Path B/C entries fresh: if an EAS attestation appears later, surface UID in UI.
+  await backfillMissingAttestationUids(agentRegistry, { maxLookups: 10 });
+
+  const preview = agentRegistry.slice(0, 10).map(toAgentResponse);
 
   res.json({
     count: preview.length,
@@ -358,6 +746,8 @@ app.get('/agents', async (req, res) => {
 
 // ─── Route: MERC holder bypass ────────────────────────────────────────────────
 app.get('/agents/merc', async (req, res) => {
+  await hydrateAgentRegistry();
+
   const walletAddress = req.query.wallet;
   if (!walletAddress) {
     return res.status(400).json({ error: 'Pass ?wallet=0x... to verify MERC balance' });
@@ -369,17 +759,15 @@ app.get('/agents/merc', async (req, res) => {
       mercContract: MERC_BASE
     });
   }
+
+  await backfillMissingAttestationUids(agentRegistry, { maxLookups: 25 });
+
   res.json({
     count: agentRegistry.length,
     total: agentRegistry.length,
     mercHolder: true,
     balance,
-    agents: agentRegistry.map(a => ({
-      address: a.address,
-      attestationUid: a.attestationUid || null,
-      registeredAt: a.registeredAt,
-      agentNumber: a.agentNumber
-    }))
+    agents: agentRegistry.map(toAgentResponse)
   });
 });
 
@@ -388,7 +776,9 @@ app.get('/agents/merc', async (req, res) => {
 // MUST be declared before /agents/:address wildcard route.
 // The agent signs the nonce with their wallet, then submits to POST /agents/register
 // with { address, signature }.
-app.get('/agents/challenge', (req, res) => {
+app.get('/agents/challenge', async (req, res) => {
+  await hydrateAgentRegistry();
+
   const { address } = req.query;
   if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
     return res.status(400).json({ error: 'Pass ?address=0x...' });
@@ -397,14 +787,10 @@ app.get('/agents/challenge', (req, res) => {
   // Already registered?
   const existing = agentRegistry.find(a => a.address.toLowerCase() === address.toLowerCase());
   if (existing) {
+    await backfillAttestationUidForEntry(existing);
     return res.json({
       message: 'Already registered',
-      agent: {
-        address: existing.address,
-        attestationUid: existing.attestationUid,
-        registeredAt: existing.registeredAt,
-        agentNumber: existing.agentNumber
-      }
+      agent: toAgentResponse(existing)
     });
   }
 
@@ -419,17 +805,138 @@ app.get('/agents/challenge', (req, res) => {
 });
 
 // ─── Route: Single agent lookup ───────────────────────────────────────────────
+// Path C: x402 payment-proof registration for Agentic wallets that can't signMessage
+app.use('/agents/register/agentic', async (req, res, next) => {
+  const paymentHeader = req.headers['x-payment'] || req.headers['payment-signature'];
+  if (!paymentHeader) {
+    res.setHeader('PAYMENT-REQUIRED', getPaymentRequiredHeader(AGENTIC_REGISTER_PAYMENT_REQUIREMENTS));
+    return res.status(402).json(AGENTIC_REGISTER_PAYMENT_REQUIREMENTS);
+  }
+
+  try {
+    const verifyResult = await verifyCdpPayment(
+      paymentHeader,
+      AGENTIC_REGISTER_PAYMENT_REQUIREMENTS.accepts[0],
+      'CDP verify agentic registration'
+    );
+    if (!verifyResult?.isValid || !verifyResult?.payer) {
+      return res.status(402).json({
+        ...AGENTIC_REGISTER_PAYMENT_REQUIREMENTS,
+        error: verifyResult?.invalidReason || 'payment_invalid'
+      });
+    }
+    req.x402RegisterVerified = true;
+    req.x402RegisterPayer = String(verifyResult.payer);
+    req.x402RegisterPaymentHeader = paymentHeader;
+    return next();
+  } catch (e) {
+    console.error('Agentic registration verify error:', e.message);
+    return res.status(402).json({
+      ...AGENTIC_REGISTER_PAYMENT_REQUIREMENTS,
+      error: 'facilitator_unavailable'
+    });
+  }
+});
+
+app.all('/agents/register/agentic', async (req, res) => {
+  await hydrateAgentRegistry();
+
+  if (!req.x402RegisterVerified || !req.x402RegisterPayer) {
+    return res.status(402).json({ error: 'payment_required' });
+  }
+
+  const payerAddress = req.x402RegisterPayer.toLowerCase();
+  if (!/^0x[a-fA-F0-9]{40}$/.test(payerAddress)) {
+    return res.status(403).json({ error: 'Verified payer is not a valid EVM address' });
+  }
+
+  const requestedAddress = (req.body?.address || req.query?.address || '').toString().trim();
+  if (requestedAddress && requestedAddress.toLowerCase() !== payerAddress) {
+    return res.status(403).json({
+      error: 'Submitted address does not match x402 payer',
+      expectedPayer: payerAddress
+    });
+  }
+
+  const existing = agentRegistry.find(a => a.address.toLowerCase() === payerAddress);
+  if (existing) {
+    await backfillAttestationUidForEntry(existing);
+
+    if (!existing.proofTxHash && req.x402RegisterPaymentHeader) {
+      try {
+        const settleResult = await settleCdpPayment(
+          req.x402RegisterPaymentHeader,
+          AGENTIC_REGISTER_PAYMENT_REQUIREMENTS.accepts[0],
+          'CDP settle existing agentic registration'
+        );
+        existing.proofTxHash = extractSettleTxHash(settleResult) || null;
+        chainRegistrationCache.expiresAt = 0;
+      } catch (e) {
+        console.error('Agentic existing-registration settle error:', e.message);
+      }
+    }
+
+    return res.json({
+      message: 'Already registered',
+      path: 'x402-payment-proof',
+      agent: toAgentResponse(existing)
+    });
+  }
+
+  let settleTxHash = null;
+  try {
+    const settleResult = await settleCdpPayment(
+      req.x402RegisterPaymentHeader,
+      AGENTIC_REGISTER_PAYMENT_REQUIREMENTS.accepts[0],
+      'CDP settle agentic registration'
+    );
+    settleTxHash = extractSettleTxHash(settleResult);
+  } catch (e) {
+    console.error('Agentic registration settle error:', e.message);
+  }
+
+  const attestation = await lookupEasAttestation(payerAddress);
+  const entry = {
+    address: payerAddress,
+    attestationUid: attestation?.uid || null,
+    proofTxHash: settleTxHash || null,
+    registeredAt: attestation?.time
+      ? new Date(attestation.time * 1000).toISOString()
+      : new Date().toISOString(),
+    agentNumber: agentRegistry.length + 1
+  };
+  agentRegistry.push(entry);
+  sortAndRenumberRegistry();
+  chainRegistrationCache.expiresAt = 0;
+
+  const responseBody = {
+    message: 'Registered via x402 payment proof (Path C)',
+    path: 'x402-payment-proof',
+    agent: toAgentResponse(entry),
+    note: entry.attestationUid
+      ? 'EAS attestation found and linked automatically.'
+      : 'No EAS attestation linked yet. Showing x402 proof tx; EAS UID auto-links once available.'
+  };
+
+  if (settleTxHash) {
+    responseBody.settleTxHash = settleTxHash;
+    responseBody.settleExplorer = `https://basescan.org/tx/${settleTxHash}`;
+    res.setHeader('X-Settle-Tx', settleTxHash);
+  }
+
+  return res.json(responseBody);
+});
+
 app.get('/agents/:address', async (req, res) => {
+  await hydrateAgentRegistry();
+
   const addr = req.params.address.toLowerCase();
   const agent = agentRegistry.find(a => a.address.toLowerCase() === addr);
   if (!agent) return res.status(404).json({ error: 'Agent not registered' });
 
-  res.json({
-    address: agent.address,
-    attestationUid: agent.attestationUid || null,
-    registeredAt: agent.registeredAt,
-    agentNumber: agent.agentNumber
-  });
+  await backfillAttestationUidForEntry(agent);
+
+  res.json(toAgentResponse(agent));
 });
 
 // ─── EAS attestation lookup ───────────────────────────────────────────────────
@@ -486,6 +993,8 @@ async function lookupEasAttestation(address) {
 // Both paths produce the same registry entry. Path B entries have attestationUid = null
 // until an EAS attestation is linked.
 app.post('/agents/register', async (req, res) => {
+  await hydrateAgentRegistry();
+
   const { address, signature } = req.body;
   if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
     return res.status(400).json({
@@ -499,14 +1008,10 @@ app.post('/agents/register', async (req, res) => {
   // Check if already registered
   const existing = agentRegistry.find(a => a.address.toLowerCase() === address.toLowerCase());
   if (existing) {
+    await backfillAttestationUidForEntry(existing);
     return res.json({
       message: 'Already registered',
-      agent: {
-        address: existing.address,
-        attestationUid: existing.attestationUid,
-        registeredAt: existing.registeredAt,
-        agentNumber: existing.agentNumber
-      }
+      agent: toAgentResponse(existing)
     });
   }
 
@@ -523,7 +1028,6 @@ app.post('/agents/register', async (req, res) => {
     const expectedMessage = `MERC Agent Registry: prove ownership of ${address} — nonce: ${nonce}`;
 
     try {
-      const { verifyMessage } = await import('viem');
       const isValid = await verifyMessage({
         address,
         message: expectedMessage,
@@ -545,20 +1049,17 @@ app.post('/agents/register', async (req, res) => {
     const entry = {
       address,
       attestationUid: null,
+      proofTxHash: null,
       registeredAt: new Date().toISOString(),
       agentNumber: agentRegistry.length + 1
     };
     agentRegistry.push(entry);
+    sortAndRenumberRegistry();
 
     return res.json({
       message: 'Registered via signature verification (Path B)',
       path: 'challenge-response',
-      agent: {
-        address: entry.address,
-        attestationUid: entry.attestationUid,
-        registeredAt: entry.registeredAt,
-        agentNumber: entry.agentNumber
-      },
+      agent: toAgentResponse(entry),
       note: 'No EAS attestation linked. Attest on Schema #1181 to earn on-chain credential.',
       easAttest: `https://base.easscan.org/attestation/create#schema=${EAS_SCHEMA_UID}`
     });
@@ -580,20 +1081,17 @@ app.post('/agents/register', async (req, res) => {
   const entry = {
     address,
     attestationUid: attestation.uid,
+    proofTxHash: null,
     registeredAt: new Date(attestation.time * 1000).toISOString(),
     agentNumber: agentRegistry.length + 1
   };
   agentRegistry.push(entry);
+  sortAndRenumberRegistry();
 
   res.json({
     message: 'Registered via EAS attestation (Path A)',
     path: 'eas',
-    agent: {
-      address: entry.address,
-      attestationUid: entry.attestationUid,
-      registeredAt: entry.registeredAt,
-      agentNumber: entry.agentNumber
-    },
+    agent: toAgentResponse(entry),
     attester: attestation.attester,
     easExplorer: `https://base.easscan.org/attestation/view/${attestation.uid}`
   });
@@ -601,21 +1099,18 @@ app.post('/agents/register', async (req, res) => {
 
 // ─── Route: Paid full registry (reached after payment verified in middleware) ──
 app.get('/api/agents/full', async (req, res) => {
-  const agents = agentRegistry.map(a => ({
-    address: a.address,
-    attestationUid: a.attestationUid || null,
-    registeredAt: a.registeredAt,
-    agentNumber: a.agentNumber
-  }));
+  await hydrateAgentRegistry();
+
+  await backfillMissingAttestationUids(agentRegistry, { maxLookups: 100 });
+
+  const agents = agentRegistry.map(toAgentResponse);
 
   // Settle before responding so we can include the tx hash
   let settleTxHash = null;
   if (req.x402PaymentHeader && req.x402Verified) {
     try {
       const settleResult = await settleCdpPayment(req.x402PaymentHeader);
-      // CDP settle result shape: { success, transaction: { hash, ... } }
-      // CDP settle response: { success: true, transaction: "0x..." }
-      settleTxHash = settleResult?.transaction || settleResult?.txHash || settleResult?.hash || null;
+      settleTxHash = extractSettleTxHash(settleResult);
       if (settleTxHash) {
         console.log('Settled tx:', settleTxHash);
       }
@@ -659,8 +1154,13 @@ app.get('/schema', (req, res) => res.json({
       works_for: 'Agentic wallets, CDP wallets, any wallet that can sign messages',
       note: 'No EAS attestation required. Signature proves ownership.'
     },
+    pathC: {
+      how: 'Call /agents/register/agentic with x402 payment. Registry verifies facilitator payer and registers that payer address.',
+      works_for: 'Agentic wallets that can pay via x402 but cannot sign arbitrary messages',
+      endpoint: '/agents/register/agentic'
+    },
     endpoint: 'POST /agents/register',
-    note: 'Trustless — no manual review. EAS attestation or signature is the credential.'
+    note: 'Trustless — no manual review. EAS attestation, signature, or x402 payer proof is the credential.'
   }
 }));
 
@@ -676,6 +1176,7 @@ app.get('/', (req, res) => res.json({
     free: '/agents (top 10 preview)',
     mercHolder: '/agents/merc?wallet=0x... (100+ MERC = full access free)',
     lookup: '/agents/:address',
+    agenticRegister: '/agents/register/agentic (x402 payment-proof registration)',
     paid: '/api/agents/full (x402 official, $0.01 USDC — Bazaar discoverable)',
     schema: '/schema'
   }
