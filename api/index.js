@@ -16,7 +16,7 @@ app.use(express.json());
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MERC_BASE = '0x8923947EAfaf4aD68F1f0C9eb5463eC876D79058';
 const BLOCKSCOUT_BASE = 'https://base.blockscout.com/api/v2';
-const EAS_SCHEMA_UID = '0xd23bf1c0bc1b08d7b88f990f0e3c39721c40d897eef77355b6ac9f16cafe187d';
+const EAS_SCHEMA_UID = '0xd517dc2a16083df866b992430d9028924fc204d0457ff4d452f3c5b738a248af';
 const MERC_FREE_THRESHOLD = 100;
 // ClawOps EOA — signing wallet, usable for openx402 seller registration
 // (CDP wallet 0xC1ce2f3fc018EB304Fa178BDDFFf0E5664Fa6B64 is custodial, can't sign for registration)
@@ -281,15 +281,9 @@ function loadRegistry() {
   return [
     {
       address: '0xEaAE848fbD8F88874F5660E3F615a1430EEE5880',
-      attestationUid: '0xbb72046bca7f3ff34bfdf49d12e8bcfe3e0381029a8fcdebad2b899a3fe9fa96',
-      registeredAt: '2026-03-10T22:49:00.000Z',
+      attestationUid: '0xa5786bfdd05554faf80d255a064565c97ef58b53963e3a9df0313be0edf6c258',
+      registeredAt: '2026-03-12T13:17:34.000Z',
       agentNumber: 1
-    },
-    {
-      address: '0xEa8F59B504F18Ac7ed25C735f07864ae2EeFa493',
-      attestationUid: '0xc925561d4caee32551ea47a640c3dc4e4cdcc5960bdbcbc62f285d9664f48346',
-      registeredAt: '2026-03-11T00:09:00.000Z',
-      agentNumber: 2
     }
   ];
 }
