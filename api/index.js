@@ -136,8 +136,9 @@ const agentsFullDiscovery = declareDiscoveryExtension({
       paid: true,
       agents: [
         {
-          address: '0xEaAE848fbD8F88874F5660E3F615a1430EEE5880',
-          agentName: 'Botti',
+          // Botti entry removed — not authorized by Jake. Re-add when Jake confirms.
+          // address: '0xEaAE848fbD8F88874F5660E3F615a1430EEE5880',
+          // agentName: 'Botti',
           agentType: 'Orchestrator',
           modelProvider: 'Anthropic Claude',
           mercBalance: 5924,
@@ -277,19 +278,9 @@ app.use('/api/agents/full', async (req, res, next) => {
 let agentRegistry = loadRegistry();
 
 function loadRegistry() {
+  // NOTE: Botti entry removed — Jake has not authorized inclusion. Re-add when Jake confirms.
+  // Attestation UIDs in this seed data are placeholder/fabricated — not real on-chain attestations.
   return [
-    {
-      address: '0xEaAE848fbD8F88874F5660E3F615a1430EEE5880',
-      agentName: 'Botti',
-      agentType: 'Orchestrator',
-      modelProvider: 'Anthropic Claude',
-      operatorHandle: 'Jake Giebel (@giebz)',
-      githubOrTwitter: '@giebz',
-      attestationUid: '0xbb72046bca7f3ff34bfdf49d12e8bcfe3e0381029a8fcdebad2b899a3fe9fa96',
-      registeredAt: '2026-03-10T22:49:00.000Z',
-      mercBalance: 5924,
-      agentNumber: 1
-    },
     {
       address: '0xEa8F59B504F18Ac7ed25C735f07864ae2EeFa493',
       agentName: 'ClawOps',
@@ -297,10 +288,10 @@ function loadRegistry() {
       modelProvider: 'Anthropic Claude',
       operatorHandle: 'LMercdigital',
       githubOrTwitter: '@lmercdigital',
-      attestationUid: '0xc925561d4caee32551ea47a640c3dc4e4cdcc5960bdbcbc62f285d9664f48346',
+      attestationUid: null, // EAS schema not yet deployed — placeholder only
       registeredAt: '2026-03-11T00:09:00.000Z',
       mercBalance: 0,
-      agentNumber: 2
+      agentNumber: 1
     }
   ];
 }
@@ -321,10 +312,7 @@ async function checkMercBalance(address) {
 app.get('/agents', async (req, res) => {
   const preview = agentRegistry.slice(0, 10).map(a => ({
     address: a.address,
-    agentName: a.agentName,
-    agentType: a.agentType,
-    modelProvider: a.modelProvider,
-    mercBalance: a.mercBalance || 0,
+    address: a.address,
     attestationUid: a.attestationUid || null,
     registeredAt: a.registeredAt,
     agentNumber: a.agentNumber
@@ -358,7 +346,12 @@ app.get('/agents/merc', async (req, res) => {
     total: agentRegistry.length,
     mercHolder: true,
     balance,
-    agents: agentRegistry.map(a => ({ ...a }))
+    agents: agentRegistry.map(a => ({
+      address: a.address,
+      attestationUid: a.attestationUid || null,
+      registeredAt: a.registeredAt,
+      agentNumber: a.agentNumber
+    }))
   });
 });
 
@@ -368,13 +361,12 @@ app.get('/agents/:address', async (req, res) => {
   const agent = agentRegistry.find(a => a.address.toLowerCase() === addr);
   if (!agent) return res.status(404).json({ error: 'Agent not registered' });
 
-  try {
-    const r = await axios.get(`${BLOCKSCOUT_BASE}/addresses/${agent.address}/token-balances`);
-    const merc = r.data?.find(t => t.token?.address?.toLowerCase() === MERC_BASE.toLowerCase());
-    agent.mercBalance = merc ? parseInt(merc.value) / 1e18 : 0;
-  } catch (e) {}
-
-  res.json(agent);
+  res.json({
+    address: agent.address,
+    attestationUid: agent.attestationUid || null,
+    registeredAt: agent.registeredAt,
+    agentNumber: agent.agentNumber
+  });
 });
 
 // ─── Route: POST /agents/register ────────────────────────────────────────────
@@ -406,17 +398,12 @@ app.post('/agents/register', async (req, res) => {
 
 // ─── Route: Paid full registry (reached after payment verified in middleware) ──
 app.get('/api/agents/full', async (req, res) => {
-  const agents = await Promise.all(
-    agentRegistry.map(async (a) => {
-      try {
-        const r = await axios.get(`${BLOCKSCOUT_BASE}/addresses/${a.address}/token-balances`, { timeout: 3000 });
-        const merc = r.data?.find(t => t.token?.address?.toLowerCase() === MERC_BASE.toLowerCase());
-        return { ...a, mercBalance: merc ? parseInt(merc.value) / 1e18 : a.mercBalance };
-      } catch (e) {
-        return { ...a };
-      }
-    })
-  );
+  const agents = agentRegistry.map(a => ({
+    address: a.address,
+    attestationUid: a.attestationUid || null,
+    registeredAt: a.registeredAt,
+    agentNumber: a.agentNumber
+  }));
 
   res.json({
     count: agents.length,
