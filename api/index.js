@@ -265,17 +265,10 @@ app.use('/api/agents/full', async (req, res, next) => {
     req.x402Verified = true;
     next();
   } catch (e) {
-    console.error('Payment verify error:', e.message, e.stack);
-    // Return detailed error for debugging (strip in production later)
+    console.error('Payment verify error:', e.message);
     return res.status(402).json({
       ...PAYMENT_REQUIREMENTS,
-      error: 'facilitator_unavailable',
-      debug: {
-        message: e.message,
-        cdpKeyId: cdpKeyId ? cdpKeyId.substring(0, 8) + '...' : 'MISSING',
-        cdpSecret: cdpSecret ? cdpSecret.substring(0, 8) + '...' : 'MISSING',
-        facilitatorUrl
-      }
+      error: 'facilitator_unavailable'
     });
   }
 });
@@ -440,66 +433,6 @@ app.get('/api/agents/full', async (req, res) => {
       console.error('Settle error (non-fatal):', e.message);
     });
   }
-});
-
-// ─── Debug endpoint (temp) — test CDP auth from within Vercel runtime ─────────
-app.get('/debug/facilitator', async (req, res) => {
-  const basePath = getFacilitatorBasePath();
-  const result = {
-    envVars: {
-      CDP_API_KEY: process.env.CDP_API_KEY ? process.env.CDP_API_KEY.substring(0, 8) + '...' : 'MISSING',
-      CDP_API_KEY_ID: process.env.CDP_API_KEY_ID ? process.env.CDP_API_KEY_ID.substring(0, 8) + '...' : 'MISSING',
-      CDP_API_KEY_SECRET: process.env.CDP_API_KEY_SECRET ? process.env.CDP_API_KEY_SECRET.substring(0, 8) + '...' : 'MISSING',
-      CDP_API_SECRET: process.env.CDP_API_SECRET ? process.env.CDP_API_SECRET.substring(0, 8) + '...' : 'MISSING',
-      CDP_FACILITATOR_URL: process.env.CDP_FACILITATOR_URL || '(not set)'
-    },
-    resolved: {
-      cdpKeyId: cdpKeyId ? cdpKeyId.substring(0, 8) + '...' : 'MISSING',
-      cdpSecret: cdpSecret ? cdpSecret.substring(0, 8) + '...' : 'MISSING',
-      facilitatorUrl,
-      basePath
-    },
-    jwtTest: null,
-    authMapTest: null,
-    supportedTest: null
-  };
-
-  // Test 1: JWT generation using derived path
-  try {
-    const jwt = await generateCdpJwt('GET', `${basePath}/supported`);
-    result.jwtTest = 'ok — ' + jwt.substring(0, 40) + '...';
-  } catch(e) {
-    result.jwtTest = 'FAILED: ' + e.message;
-  }
-
-  // Test 2: Auth header map (uses buildCdpAuthHeadersMap with derived paths)
-  try {
-    const map = await buildCdpAuthHeadersMap();
-    result.authMapTest = {
-      hasVerify: !!map.verify?.Authorization,
-      hasSettle: !!map.settle?.Authorization,
-      hasSupported: !!map.supported?.Authorization
-    };
-  } catch(e) {
-    result.authMapTest = 'FAILED: ' + e.message;
-  }
-
-  // Test 3: Actually hit facilitatorUrl/supported with auth
-  try {
-    const map = await buildCdpAuthHeadersMap();
-    const resp = await fetch(`${facilitatorUrl}/supported`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json', ...(map.supported || {}) }
-    });
-    const text = await resp.text();
-    let data;
-    try { data = JSON.parse(text); } catch(e) { data = text.substring(0, 150); }
-    result.supportedTest = { status: resp.status, data };
-  } catch(e) {
-    result.supportedTest = 'FAILED: ' + e.message;
-  }
-
-  res.json(result);
 });
 
 // ─── Schema info ──────────────────────────────────────────────────────────────
