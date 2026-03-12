@@ -367,31 +367,101 @@ app.get('/agents/:address', async (req, res) => {
   });
 });
 
-// ─── Route: POST /agents/register ────────────────────────────────────────────
-app.post('/agents/register', async (req, res) => {
-  const { address, agentName, agentType, modelProvider, operatorHandle, githubOrTwitter } = req.body;
-  if (!address || !agentName) {
-    return res.status(400).json({ error: 'address and agentName required' });
+// ─── EAS attestation lookup ───────────────────────────────────────────────────
+// Query the EAS GraphQL API for attestations on our schema where recipient = address
+// Returns the attestation UID if found, null otherwise
+async function lookupEasAttestation(address) {
+  const query = `{
+    attestations(
+      where: {
+        schemaId: { equals: "${EAS_SCHEMA_UID}" },
+        recipient: { equals: "${address}", mode: insensitive },
+        revoked: { equals: false }
+      },
+      orderBy: { time: desc },
+      take: 1
+    ) {
+      id
+      attester
+      recipient
+      time
+      revocationTime
+    }
+  }`;
+
+  try {
+    const resp = await axios.post(
+      'https://base.easscan.org/graphql',
+      { query },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 5000 }
+    );
+    const attestations = resp.data?.data?.attestations || [];
+    if (attestations.length === 0) return null;
+    return {
+      uid: attestations[0].id,
+      attester: attestations[0].attester,
+      time: attestations[0].time
+    };
+  } catch(e) {
+    console.error('EAS lookup error:', e.message);
+    return null;
   }
+}
+
+// ─── Route: POST /agents/register ────────────────────────────────────────────
+// Trustless registration: checks EAS for a valid Schema #1176 attestation
+// where recipient = submitted address. If found, auto-approves with the on-chain UID.
+// No manual review, no trust assumptions — the attestation IS the credential.
+app.post('/agents/register', async (req, res) => {
+  const { address } = req.body;
+  if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    return res.status(400).json({
+      error: 'Valid address required (0x...)',
+      hint: 'Attest your agent wallet on EAS Schema #1176 on Base first, then submit here.',
+      schema: `https://base.easscan.org/schema/view/${EAS_SCHEMA_UID}`
+    });
+  }
+
+  // Check if already registered
+  const existing = agentRegistry.find(a => a.address.toLowerCase() === address.toLowerCase());
+  if (existing) {
+    return res.json({
+      message: 'Already registered',
+      agent: {
+        address: existing.address,
+        attestationUid: existing.attestationUid,
+        registeredAt: existing.registeredAt,
+        agentNumber: existing.agentNumber
+      }
+    });
+  }
+
+  // Look up EAS attestation on-chain
+  const attestation = await lookupEasAttestation(address);
+  if (!attestation) {
+    return res.status(403).json({
+      error: 'No valid EAS attestation found for this address',
+      hint: 'Attest your agent wallet on Schema #1176 on Base, then re-submit.',
+      schema: `https://base.easscan.org/schema/view/${EAS_SCHEMA_UID}`,
+      easAttest: 'https://base.easscan.org/attestate'
+    });
+  }
+
+  // Valid attestation found — register
   const entry = {
     address,
-    agentName,
-    agentType: agentType || 'Unknown',
-    modelProvider: modelProvider || 'Unknown',
-    operatorHandle: operatorHandle || '',
-    githubOrTwitter: githubOrTwitter || '',
-    registeredAt: new Date().toISOString(),
-    attestationUid: null,
-    mercBalance: 0
+    attestationUid: attestation.uid,
+    registeredAt: new Date(attestation.time * 1000).toISOString(),
+    agentNumber: agentRegistry.length + 1
   };
-  const existing = agentRegistry.findIndex(a => a.address.toLowerCase() === address.toLowerCase());
-  if (existing >= 0) {
-    agentRegistry[existing] = { ...agentRegistry[existing], ...entry };
-    return res.json({ message: 'Agent updated', entry });
-  }
-  entry.agentNumber = agentRegistry.length + 1;
   agentRegistry.push(entry);
-  res.json({ message: 'Agent registered', entry });
+
+  res.json({
+    message: 'Registered via EAS attestation',
+    agent: entry,
+    attester: attestation.attester,
+    easExplorer: `https://base.easscan.org/attestation/view/${attestation.uid}`
+  });
 });
 
 // ─── Route: Paid full registry (reached after payment verified in middleware) ──
@@ -441,9 +511,15 @@ app.get('/api/agents/full', async (req, res) => {
 app.get('/schema', (req, res) => res.json({
   schemaUid: EAS_SCHEMA_UID,
   easExplorer: `https://base.easscan.org/schema/view/${EAS_SCHEMA_UID}`,
-  fields: ['agentName', 'agentType', 'modelProvider', 'operatorHandle', 'githubOrTwitter'],
   mercFreeThreshold: MERC_FREE_THRESHOLD,
-  mercContract: MERC_BASE
+  mercContract: MERC_BASE,
+  registration: {
+    how: 'Attest your agent wallet on EAS Schema #1176 on Base, then POST /agents/register with { "address": "0x..." }',
+    easAttest: 'https://base.easscan.org/attestate',
+    endpoint: 'POST /agents/register',
+    body: '{ "address": "0x<your-agent-wallet>" }',
+    note: 'Trustless — no manual review. The EAS attestation is the credential.'
+  }
 }));
 
 // ─── Health / root ─────────────────────────────────────────────────────────────
