@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MERC Agent Registry</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --border: #1e1e2e;
+      --accent: #6366f1;
+      --accent2: #22d3ee;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    a { color: var(--accent2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* NAV */
+    nav {
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      background: rgba(10,10,15,0.92);
+      backdrop-filter: blur(8px);
+      z-index: 10;
+    }
+    .logo { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+    .logo span { color: var(--accent2); }
+    .badge {
+      background: var(--accent);
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+      letter-spacing: 0.5px;
+    }
+    .nav-links { margin-left: auto; display: flex; gap: 20px; font-size: 14px; color: var(--muted); }
+
+    /* HERO */
+    .hero {
+      padding: 72px 24px 48px;
+      max-width: 720px;
+      margin: 0 auto;
+      text-align: center;
+    }
+    .hero h1 {
+      font-size: clamp(2rem, 5vw, 3rem);
+      font-weight: 800;
+      letter-spacing: -1px;
+      line-height: 1.15;
+      margin-bottom: 18px;
+    }
+    .hero h1 .highlight { color: var(--accent2); }
+    .hero p { color: var(--muted); font-size: 17px; max-width: 540px; margin: 0 auto 32px; }
+    .hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+    /* STATS */
+    .stats {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin: 0 auto 64px;
+      max-width: 720px;
+      padding: 0 24px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 28px;
+      min-width: 140px;
+      flex: 1;
+      text-align: center;
+    }
+    .stat-value { font-size: 28px; font-weight: 700; color: var(--accent2); }
+    .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-top: 4px; }
+
+    /* MAIN */
+    main { max-width: 900px; margin: 0 auto; padding: 0 24px 80px; }
+
+    /* SECTION */
+    section { margin-bottom: 56px; }
+    .section-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .section-title .icon { font-size: 22px; }
+
+    /* STEPS */
+    .steps { display: flex; flex-direction: column; gap: 16px; }
+    .step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+    .step-num {
+      width: 36px; height: 36px; min-width: 36px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-weight: 700;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .step-content h3 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+    .step-content p { color: var(--muted); font-size: 14px; }
+    .step-content a { color: var(--accent2); }
+    code {
+      background: #1a1a28;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 13px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      color: var(--accent2);
+    }
+
+    /* REGISTRY TABLE */
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th {
+      text-align: left;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    td { padding: 14px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    .agent-num { color: var(--muted); font-size: 12px; }
+    .addr {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--accent2);
+    }
+    .uid-cell { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 6px; }
+
+    /* API DOCS */
+    .endpoint-list { display: flex; flex-direction: column; gap: 12px; }
+    .endpoint {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .method {
+      font-family: monospace;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 4px;
+      min-width: 44px;
+      text-align: center;
+    }
+    .method-get { background: rgba(34,211,238,0.15); color: var(--accent2); }
+    .method-post { background: rgba(99,102,241,0.15); color: var(--accent); }
+    .ep-path { font-family: monospace; font-size: 13px; color: var(--text); font-weight: 600; }
+    .ep-desc { color: var(--muted); font-size: 13px; flex: 1; min-width: 200px; }
+    .ep-tag {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .ep-tag.free { border-color: #22c55e44; color: var(--green); }
+    .ep-tag.paid { border-color: #f59e0b44; color: var(--yellow); }
+    .ep-tag.merc { border-color: #6366f144; color: var(--accent); }
+
+    /* SCHEMA */
+    .schema-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 24px;
+    }
+    .schema-box pre {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--accent2);
+      white-space: pre-wrap;
+    }
+    .schema-meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 16px; }
+    .schema-meta-item { font-size: 13px; color: var(--muted); }
+    .schema-meta-item span { color: var(--text); }
+
+    /* LOADING */
+    .loading { color: var(--muted); font-style: italic; padding: 20px 0; }
+    .error-text { color: var(--red); font-size: 13px; padding: 12px 0; }
+
+    /* FOOTER */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--text); }
+
+    @media (max-width: 600px) {
+      .hero { padding: 48px 16px 32px; }
+      .stats { flex-direction: column; }
+      nav { flex-wrap: wrap; }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">🦞 <span>MERC</span> Agent Registry</div>
+  <div class="badge">Base</div>
+  <div class="nav-links">
+    <a href="#how-it-works">How it works</a>
+    <a href="#registry">Registry</a>
+    <a href="#api">API</a>
+  </div>
+</nav>
+
+<div class="hero">
+  <h1>Trustless AI Agent<br/>Identity on <span class="highlight">Base</span></h1>
+  <p>Attest your agent wallet on Base EAS. Auto-registered in ~10 minutes. Query with $MERC or x402.</p>
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="https://base.easscan.org/schema/view/0xd517dc2a16083df866b992430d9028924fc204d0457ff4d452f3c5b738a248af" target="_blank">Attest on EAS →</a>
+    <a class="btn btn-outline" href="#api">View API Docs</a>
+  </div>
+</div>
+
+<div class="stats" id="stats">
+  <div class="stat-card">
+    <div class="stat-value" id="stat-agents">—</div>
+    <div class="stat-label">Registered Agents</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">$0.01</div>
+    <div class="stat-label">Per Query (USDC)</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">≥100</div>
+    <div class="stat-label">$MERC for Free Access</div>
+  </div>
+</div>
+
+<main>
+
+  <!-- HOW IT WORKS -->
+  <section id="how-it-works">
+    <div class="section-title"><span class="icon">⚡</span> How to Register Your Agent</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h3>Attest on Base EAS</h3>
+          <p>Go to <a href="https://base.easscan.org/schema/view/0xd517dc2a16083df866b992430d9028924fc204d0457ff4d452f3c5b738a248af" target="_blank">EAS Schema on Base</a> and create an attestation with your agent's wallet address as the <code>agentAddress</code> field. Self-attest: set yourself as both attester and recipient.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h3>Wait ~10 minutes</h3>
+          <p>The registry polls Base EAS every 10 minutes for new attestations on the schema. Your agent will be auto-registered — no manual submission required.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h3>You're in the registry</h3>
+          <p>Your agent appears in the live registry table below. Query it via the API with x402 ($0.01 USDC) or hold ≥100 $MERC for free access.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <h3>Get seeded with $MERC (early builders)</h3>
+          <p>Early registrants receive 200 $MERC to their agent wallet — enough for free API access. DM <a href="https://twitter.com/MERC_token" target="_blank">@MERC_token</a> after attesting. 🦞</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- REGISTRY TABLE -->
+  <section id="registry">
+    <div class="section-title"><span class="icon">📋</span> Live Registry</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Agent Address</th>
+            <th>Attestation UID</th>
+            <th>Registered</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="registry-tbody">
+          <tr><td colspan="5" class="loading">Loading registry…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- API DOCS -->
+  <section id="api">
+    <div class="section-title"><span class="icon">🔌</span> API Reference</div>
+    <div class="endpoint-list">
+      <div class="endpoint">
+        <span class="method method-get">GET</span>
+        <span class="ep-path">/agents</span>
+        <span class="ep-desc">Top 10 agents preview. Returns: agentNumber, address, attestationUid, registeredAt.</span>
+        <span class="ep-tag free">Free</span>
+      </div>
+      <div class="endpoint">
+        <span class="method method-get">GET</span>
+        <span class="ep-path">/agents/:address</span>
+        <span class="ep-desc">Lookup a specific agent by wallet address.</span>
+        <span class="ep-tag free">Free</span>
+      </div>
+      <div class="endpoint">
+        <span class="method method-get">GET</span>
+        <span class="ep-path">/agents/merc?wallet=0x…</span>
+        <span class="ep-desc">Full registry access for wallets holding ≥100 $MERC. No payment required.</span>
+        <span class="ep-tag merc">≥100 $MERC</span>
+      </div>
+      <div class="endpoint">
+        <span class="method method-get">GET</span>
+        <span class="ep-path">/api/agents/full</span>
+        <span class="ep-desc">Full registry via x402 pay-per-request. $0.01 USDC on Base (eip155:8453). EIP-3009 transferWithAuthorization.</span>
+        <span class="ep-tag paid">$0.01 USDC / x402</span>
+      </div>
+      <div class="endpoint">
+        <span class="method method-get">GET</span>
+        <span class="ep-path">/schema</span>
+        <span class="ep-desc">Returns the active EAS schema UID and metadata.</span>
+        <span class="ep-tag free">Free</span>
+      </div>
+      <div class="endpoint">
+        <span class="method method-post">POST</span>
+        <span class="ep-path">/agents/register</span>
+        <span class="ep-desc">Manually trigger registration by attestation UID. Body: <code>{ "attestationUid": "0x…" }</code></span>
+        <span class="ep-tag free">Free</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCHEMA -->
+  <section id="schema">
+    <div class="section-title"><span class="icon">🔗</span> EAS Schema</div>
+    <div class="schema-box">
+      <pre>address agentAddress</pre>
+      <div class="schema-meta">
+        <div class="schema-meta-item">Network: <span>Base Mainnet (8453)</span></div>
+        <div class="schema-meta-item">Schema UID: <span><a href="https://base.easscan.org/schema/view/0xd517dc2a16083df866b992430d9028924fc204d0457ff4d452f3c5b738a248af" target="_blank">0xd517dc…248af</a></span></div>
+        <div class="schema-meta-item">Revocable: <span>Yes</span></div>
+        <div class="schema-meta-item">No PII — address only</div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>
+    MERC Agent Registry — powered by <a href="https://attest.org" target="_blank">EAS</a> on Base &nbsp;·&nbsp;
+    <a href="https://merc-agent-registry-lake.vercel.app" target="_blank">API Backend</a> &nbsp;·&nbsp;
+    <a href="https://twitter.com/MERC_token" target="_blank">@MERC_token</a>
+  </p>
+</footer>
+
+<script>
+  const API = 'https://merc-agent-registry-lake.vercel.app';
+
+  async function loadStats() {
+    try {
+      const r = await fetch(API + '/');
+      const d = await r.json();
+      const el = document.getElementById('stat-agents');
+      if (el) el.textContent = d.registeredAgents ?? '—';
+    } catch(e) {}
+  }
+
+  async function loadRegistry() {
+    const tbody = document.getElementById('registry-tbody');
+    try {
+      const r = await fetch(API + '/agents');
+      const data = await r.json();
+      const agents = Array.isArray(data) ? data : (data.agents || []);
+      if (!agents.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted);padding:20px">No agents registered yet. Be the first!</td></tr>';
+        return;
+      }
+      tbody.innerHTML = agents.map(a => `
+        <tr>
+          <td class="agent-num">#${a.agentNumber || '?'}</td>
+          <td><a class="addr" href="https://basescan.org/address/${a.address}" target="_blank">${a.address ? a.address.slice(0,6)+'…'+a.address.slice(-4) : '—'}</a></td>
+          <td class="uid-cell">
+            <a href="https://base.easscan.org/attestation/view/${a.attestationUid}" target="_blank" title="${a.attestationUid}">
+              ${a.attestationUid ? a.attestationUid.slice(0,10)+'…'+a.attestationUid.slice(-6) : '—'}
+            </a>
+          </td>
+          <td style="color:var(--muted);font-size:13px">${a.registeredAt ? new Date(a.registeredAt).toLocaleDateString() : '—'}</td>
+          <td><span class="dot"></span><span style="font-size:12px;color:var(--green)">Active</span></td>
+        </tr>
+      `).join('');
+    } catch(e) {
+      tbody.innerHTML = '<tr><td colspan="5" class="error-text">Could not load registry — API may be unavailable.</td></tr>';
+    }
+  }
+
+  loadStats();
+  loadRegistry();
+</script>
+</body>
+</html>
