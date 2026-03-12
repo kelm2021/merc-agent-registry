@@ -27,9 +27,35 @@ const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const BASE_MAINNET = 'eip155:8453';
 const CANONICAL_PAID_URL = 'https://merc-agent-registry-lake.vercel.app/api/agents/full';
 
-// ─── CDP JWT auth helper ──────────────────────────────────────────────────────
-// @coinbase/cdp-sdk uses jose (ESM-only) internally, so we must use dynamic import()
-// instead of require() — dynamic import works in both CJS and ESM contexts
+// ─── CDP / x402 Facilitator config ───────────────────────────────────────────
+// Canonical env vars (standardized):
+//   CDP_API_KEY        — CDP API key ID (UUID)
+//   CDP_API_KEY_SECRET — CDP API key secret (Ed25519 base64)
+//   CDP_FACILITATOR_URL — base URL for facilitator (e.g. https://api.cdp.coinbase.com/platform/v2/x402/facilitator)
+//
+// Legacy aliases (also supported for backwards compat):
+//   CDP_API_KEY_ID   → same as CDP_API_KEY
+//   CDP_API_SECRET   → same as CDP_API_KEY_SECRET
+//
+// If no CDP key is set, falls back to unauthenticated facilitator.openx402.ai (verify only).
+
+const cdpKeyId = process.env.CDP_API_KEY || process.env.CDP_API_KEY_ID;
+const cdpSecret = process.env.CDP_API_KEY_SECRET || process.env.CDP_API_SECRET;
+// CDP_FACILITATOR_URL is the canonical base URL — strip trailing slash
+// HTTPFacilitatorClient appends /verify, /settle, /supported to this base
+const facilitatorUrl = (process.env.CDP_FACILITATOR_URL || 'https://facilitator.openx402.ai').replace(/\/$/, '');
+
+// Derive JWT request paths from facilitator URL
+// e.g. https://api.cdp.coinbase.com/platform/v2/x402/facilitator → /platform/v2/x402/facilitator
+function getFacilitatorBasePath() {
+  try {
+    return new URL(facilitatorUrl).pathname.replace(/\/$/, '');
+  } catch(e) {
+    return '/platform/v2/x402/facilitator';
+  }
+}
+
+// @coinbase/cdp-sdk uses jose (ESM-only), so we must use dynamic import()
 async function generateCdpJwt(method, requestPath) {
   const { generateJwt } = await import('@coinbase/cdp-sdk/auth');
   return generateJwt({
@@ -41,40 +67,32 @@ async function generateCdpJwt(method, requestPath) {
   });
 }
 
-// ─── x402 Resource Server with Bazaar extension ───────────────────────────────
-const cdpKeyId = process.env.CDP_API_KEY_ID;
-const cdpSecret = process.env.CDP_API_SECRET;
-const facilitatorUrl = cdpKeyId
-  ? 'https://api.cdp.coinbase.com/platform/v2/x402'
-  : (process.env.CDP_FACILITATOR_URL || 'https://facilitator.openx402.ai');
-
-// HTTPFacilitatorClient calls createAuthHeaders() with NO args, then does authHeaders[path]
-// where path is "verify", "settle", or "supported". We must return { verify: {...}, settle: {...}, supported: {...} }
+// HTTPFacilitatorClient.createAuthHeaders() is called with no args, then does authHeaders[verb]
+// where verb = "verify" | "settle" | "supported"
+// Return { verify: {Authorization}, settle: {Authorization}, supported: {Authorization} }
 async function buildCdpAuthHeadersMap() {
   if (!cdpKeyId || !cdpSecret) return {};
-  try {
-    const paths = [
-      { key: 'verify',    method: 'POST', path: '/platform/v2/x402/verify' },
-      { key: 'settle',    method: 'POST', path: '/platform/v2/x402/settle' },
-      { key: 'supported', method: 'GET',  path: '/platform/v2/x402/supported' }
-    ];
-    const result = {};
-    await Promise.all(paths.map(async ({ key, method, path }) => {
-      const jwt = await generateCdpJwt(method, path);
+  const base = getFacilitatorBasePath();
+  const verbs = [
+    { key: 'verify',    method: 'POST' },
+    { key: 'settle',    method: 'POST' },
+    { key: 'supported', method: 'GET'  }
+  ];
+  const result = {};
+  await Promise.all(verbs.map(async ({ key, method }) => {
+    try {
+      const jwt = await generateCdpJwt(method, `${base}/${key}`);
       result[key] = { Authorization: 'Bearer ' + jwt };
-    }));
-    return result;
-  } catch(e) {
-    console.error('CDP JWT map error:', e.message);
-    return {};
-  }
+    } catch(e) {
+      console.error(`JWT gen failed for ${key}:`, e.message);
+    }
+  }));
+  return result;
 }
 
 const facilitatorClient = new HTTPFacilitatorClient({
   url: facilitatorUrl,
-  ...(cdpKeyId && cdpSecret ? {
-    createAuthHeaders: buildCdpAuthHeadersMap
-  } : {})
+  ...(cdpKeyId && cdpSecret ? { createAuthHeaders: buildCdpAuthHeadersMap } : {})
 });
 
 const resourceServer = new x402ResourceServer(facilitatorClient);
@@ -426,24 +444,35 @@ app.get('/api/agents/full', async (req, res) => {
 
 // ─── Debug endpoint (temp) — test CDP auth from within Vercel runtime ─────────
 app.get('/debug/facilitator', async (req, res) => {
+  const basePath = getFacilitatorBasePath();
   const result = {
-    cdpKeyId: cdpKeyId ? cdpKeyId.substring(0, 8) + '...' : 'MISSING',
-    cdpSecret: cdpSecret ? cdpSecret.substring(0, 8) + '...' : 'MISSING',
-    facilitatorUrl,
+    envVars: {
+      CDP_API_KEY: process.env.CDP_API_KEY ? process.env.CDP_API_KEY.substring(0, 8) + '...' : 'MISSING',
+      CDP_API_KEY_ID: process.env.CDP_API_KEY_ID ? process.env.CDP_API_KEY_ID.substring(0, 8) + '...' : 'MISSING',
+      CDP_API_KEY_SECRET: process.env.CDP_API_KEY_SECRET ? process.env.CDP_API_KEY_SECRET.substring(0, 8) + '...' : 'MISSING',
+      CDP_API_SECRET: process.env.CDP_API_SECRET ? process.env.CDP_API_SECRET.substring(0, 8) + '...' : 'MISSING',
+      CDP_FACILITATOR_URL: process.env.CDP_FACILITATOR_URL || '(not set)'
+    },
+    resolved: {
+      cdpKeyId: cdpKeyId ? cdpKeyId.substring(0, 8) + '...' : 'MISSING',
+      cdpSecret: cdpSecret ? cdpSecret.substring(0, 8) + '...' : 'MISSING',
+      facilitatorUrl,
+      basePath
+    },
     jwtTest: null,
     authMapTest: null,
     supportedTest: null
   };
 
-  // Test 1: JWT generation
+  // Test 1: JWT generation using derived path
   try {
-    const jwt = await generateCdpJwt('GET', '/platform/v2/x402/supported');
-    result.jwtTest = 'ok — ' + jwt.substring(0, 30) + '...';
+    const jwt = await generateCdpJwt('GET', `${basePath}/supported`);
+    result.jwtTest = 'ok — ' + jwt.substring(0, 40) + '...';
   } catch(e) {
     result.jwtTest = 'FAILED: ' + e.message;
   }
 
-  // Test 2: Auth header map
+  // Test 2: Auth header map (uses buildCdpAuthHeadersMap with derived paths)
   try {
     const map = await buildCdpAuthHeadersMap();
     result.authMapTest = {
@@ -455,26 +484,19 @@ app.get('/debug/facilitator', async (req, res) => {
     result.authMapTest = 'FAILED: ' + e.message;
   }
 
-  // Test 3: Try multiple CDP endpoint variations
-  const variations = [
-    { name: 'base-x402', url: 'https://api.cdp.coinbase.com/platform/v2/x402', jwtPath: '/platform/v2/x402/supported' },
-    { name: 'facilitator-suffix', url: 'https://api.cdp.coinbase.com/platform/v2/x402/facilitator', jwtPath: '/platform/v2/x402/facilitator/supported' },
-  ];
-  result.endpointTests = {};
-  for (const v of variations) {
-    try {
-      const jwt = await generateCdpJwt('GET', v.jwtPath);
-      const resp = await fetch(`${v.url}/supported`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + jwt }
-      });
-      const text = await resp.text();
-      let data;
-      try { data = JSON.parse(text); } catch(e) { data = text.substring(0, 100); }
-      result.endpointTests[v.name] = { status: resp.status, data };
-    } catch(e) {
-      result.endpointTests[v.name] = 'FAILED: ' + e.message;
-    }
+  // Test 3: Actually hit facilitatorUrl/supported with auth
+  try {
+    const map = await buildCdpAuthHeadersMap();
+    const resp = await fetch(`${facilitatorUrl}/supported`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json', ...(map.supported || {}) }
+    });
+    const text = await resp.text();
+    let data;
+    try { data = JSON.parse(text); } catch(e) { data = text.substring(0, 150); }
+    result.supportedTest = { status: resp.status, data };
+  } catch(e) {
+    result.supportedTest = 'FAILED: ' + e.message;
   }
 
   res.json(result);
