@@ -717,9 +717,20 @@ setInterval(() => {
 async function checkMercBalance(address) {
   if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) return 0;
   try {
-    const r = await axios.get(`${BLOCKSCOUT_BASE}/addresses/${address}/token-balances`, { timeout: 3000 });
-    const merc = r.data?.find(t => t.token?.address?.toLowerCase() === MERC_BASE.toLowerCase());
-    return merc ? parseInt(merc.value) / 1e18 : 0;
+    // Use direct RPC balanceOf — avoids Blockscout indexing lag
+    const data = '0x70a08231' + address.replace(/^0x/, '').toLowerCase().padStart(64, '0');
+    for (const rpcUrl of BASE_RPC_URLS) {
+      try {
+        const r = await axios.post(rpcUrl, {
+          jsonrpc: '2.0', id: 1, method: 'eth_call',
+          params: [{ to: MERC_BASE, data }, 'latest']
+        }, { timeout: 3000 });
+        if (r.data?.result && r.data.result !== '0x') {
+          return parseInt(r.data.result, 16) / 1e18;
+        }
+      } catch (e) { continue; }
+    }
+    return 0;
   } catch (e) {
     return 0;
   }
