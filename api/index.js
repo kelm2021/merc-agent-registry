@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const crypto = require('crypto');
 const { x402ResourceServer } = require('@x402/express');
 const { HTTPFacilitatorClient } = require('@x402/core/server');
 const { ExactEvmScheme } = require('@x402/evm/exact/server');
@@ -294,6 +295,35 @@ function loadRegistry() {
   ];
 }
 
+// ─── Nonce store (in-memory, TTL 10 min) ──────────────────────────────────────
+// Maps address.toLowerCase() → { nonce, expiresAt }
+const nonceStore = new Map();
+const NONCE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function issueNonce(address) {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const expiresAt = Date.now() + NONCE_TTL_MS;
+  nonceStore.set(address.toLowerCase(), { nonce, expiresAt });
+  return nonce;
+}
+
+function consumeNonce(address) {
+  const key = address.toLowerCase();
+  const entry = nonceStore.get(key);
+  if (!entry) return null;
+  nonceStore.delete(key); // single-use
+  if (Date.now() > entry.expiresAt) return null; // expired
+  return entry.nonce;
+}
+
+// Prune expired nonces every 10 min (no accumulation in long-running envs)
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of nonceStore) {
+    if (now > v.expiresAt) nonceStore.delete(k);
+  }
+}, NONCE_TTL_MS);
+
 // ─── MERC balance helper ───────────────────────────────────────────────────────
 async function checkMercBalance(address) {
   if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) return 0;
@@ -408,16 +438,59 @@ async function lookupEasAttestation(address) {
   }
 }
 
+// ─── Route: GET /agents/challenge ─────────────────────────────────────────────
+// Path B: Returns a nonce for the given address to sign.
+// The agent signs the nonce with their wallet, then submits to POST /agents/register
+// with { address, signature }.
+app.get('/agents/challenge', (req, res) => {
+  const { address } = req.query;
+  if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    return res.status(400).json({ error: 'Pass ?address=0x...' });
+  }
+
+  // Already registered?
+  const existing = agentRegistry.find(a => a.address.toLowerCase() === address.toLowerCase());
+  if (existing) {
+    return res.json({
+      message: 'Already registered',
+      agent: {
+        address: existing.address,
+        attestationUid: existing.attestationUid,
+        registeredAt: existing.registeredAt,
+        agentNumber: existing.agentNumber
+      }
+    });
+  }
+
+  const nonce = issueNonce(address);
+  res.json({
+    address,
+    nonce,
+    message: `MERC Agent Registry: prove ownership of ${address} — nonce: ${nonce}`,
+    instructions: 'Sign the message field with your wallet (personal_sign / eth_sign), then POST /agents/register with { address, signature }',
+    expiresInSeconds: NONCE_TTL_MS / 1000
+  });
+});
+
 // ─── Route: POST /agents/register ────────────────────────────────────────────
-// Trustless registration: checks EAS for a valid Schema #1176 attestation
-// where recipient = submitted address. If found, auto-approves with the on-chain UID.
-// No manual review, no trust assumptions — the attestation IS the credential.
+// Dual-path trustless registration:
+//
+// Path A (EAS): submit { address } — registry looks up EAS attestation on-chain.
+//   Works for any wallet that can sign Base transactions.
+//
+// Path B (challenge-response): submit { address, signature } after GET /agents/challenge.
+//   Works for Agentic/CDP wallets that can sign messages but can't do EAS contract calls.
+//   Registry verifies ecrecover(signed_message) == address, no EAS required.
+//
+// Both paths produce the same registry entry. Path B entries have attestationUid = null
+// until an EAS attestation is linked.
 app.post('/agents/register', async (req, res) => {
-  const { address } = req.body;
+  const { address, signature } = req.body;
   if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
     return res.status(400).json({
       error: 'Valid address required (0x...)',
-      hint: 'Attest your agent wallet on EAS Schema #1176 on Base first, then submit here.',
+      pathA: 'POST { address } — requires EAS attestation on Base Schema #1181',
+      pathB: 'GET /agents/challenge?address=0x... → sign nonce → POST { address, signature }',
       schema: `https://base.easscan.org/schema/view/${EAS_SCHEMA_UID}`
     });
   }
@@ -436,14 +509,69 @@ app.post('/agents/register', async (req, res) => {
     });
   }
 
-  // Look up EAS attestation on-chain
+  // ── Path B: signature provided — challenge-response verification ──────────
+  if (signature) {
+    const nonce = consumeNonce(address);
+    if (!nonce) {
+      return res.status(400).json({
+        error: 'No valid nonce found for this address (missing or expired)',
+        hint: 'Call GET /agents/challenge?address=0x... first to get a nonce, then sign and submit within 10 minutes'
+      });
+    }
+
+    const expectedMessage = `MERC Agent Registry: prove ownership of ${address} — nonce: ${nonce}`;
+
+    try {
+      const { verifyMessage } = await import('viem');
+      const isValid = await verifyMessage({
+        address,
+        message: expectedMessage,
+        signature
+      });
+
+      if (!isValid) {
+        return res.status(403).json({
+          error: 'Signature verification failed — address does not match signer',
+          hint: 'Sign the exact message string from GET /agents/challenge with the wallet at the submitted address'
+        });
+      }
+    } catch(e) {
+      console.error('Signature verify error:', e.message);
+      return res.status(500).json({ error: 'Signature verification error', detail: e.message });
+    }
+
+    // Signature valid — register (no EAS attestation UID for Path B entries)
+    const entry = {
+      address,
+      attestationUid: null,
+      registeredAt: new Date().toISOString(),
+      agentNumber: agentRegistry.length + 1
+    };
+    agentRegistry.push(entry);
+
+    return res.json({
+      message: 'Registered via signature verification (Path B)',
+      path: 'challenge-response',
+      agent: {
+        address: entry.address,
+        attestationUid: entry.attestationUid,
+        registeredAt: entry.registeredAt,
+        agentNumber: entry.agentNumber
+      },
+      note: 'No EAS attestation linked. Attest on Schema #1181 to earn on-chain credential.',
+      easAttest: `https://base.easscan.org/attestation/create#schema=${EAS_SCHEMA_UID}`
+    });
+  }
+
+  // ── Path A: no signature — EAS attestation lookup ─────────────────────────
   const attestation = await lookupEasAttestation(address);
   if (!attestation) {
     return res.status(403).json({
       error: 'No valid EAS attestation found for this address',
-      hint: 'Attest your agent wallet on Schema #1176 on Base, then re-submit.',
+      pathA: `Attest your agent wallet on Schema #1181 on Base, then re-submit.`,
+      pathB: 'Or: GET /agents/challenge?address=0x... → sign nonce → POST { address, signature } (works for Agentic/CDP wallets)',
       schema: `https://base.easscan.org/schema/view/${EAS_SCHEMA_UID}`,
-      easAttest: 'https://base.easscan.org/attestate'
+      easAttest: `https://base.easscan.org/attestation/create#schema=${EAS_SCHEMA_UID}`
     });
   }
 
@@ -457,8 +585,14 @@ app.post('/agents/register', async (req, res) => {
   agentRegistry.push(entry);
 
   res.json({
-    message: 'Registered via EAS attestation',
-    agent: entry,
+    message: 'Registered via EAS attestation (Path A)',
+    path: 'eas',
+    agent: {
+      address: entry.address,
+      attestationUid: entry.attestationUid,
+      registeredAt: entry.registeredAt,
+      agentNumber: entry.agentNumber
+    },
     attester: attestation.attester,
     easExplorer: `https://base.easscan.org/attestation/view/${attestation.uid}`
   });
@@ -514,11 +648,18 @@ app.get('/schema', (req, res) => res.json({
   mercFreeThreshold: MERC_FREE_THRESHOLD,
   mercContract: MERC_BASE,
   registration: {
-    how: 'Attest your agent wallet on EAS Schema #1176 on Base, then POST /agents/register with { "address": "0x..." }',
-    easAttest: 'https://base.easscan.org/attestate',
+    pathA: {
+      how: 'Attest your agent wallet on EAS Schema #1181 on Base, then POST /agents/register with { "address": "0x..." }',
+      easAttest: `https://base.easscan.org/attestation/create#schema=${EAS_SCHEMA_UID}`,
+      works_for: 'EOAs, standard wallets'
+    },
+    pathB: {
+      how: '1) GET /agents/challenge?address=0x...  2) Sign the returned message  3) POST /agents/register with { "address": "0x...", "signature": "0x..." }',
+      works_for: 'Agentic wallets, CDP wallets, any wallet that can sign messages',
+      note: 'No EAS attestation required. Signature proves ownership.'
+    },
     endpoint: 'POST /agents/register',
-    body: '{ "address": "0x<your-agent-wallet>" }',
-    note: 'Trustless — no manual review. The EAS attestation is the credential.'
+    note: 'Trustless — no manual review. EAS attestation or signature is the credential.'
   }
 }));
 
