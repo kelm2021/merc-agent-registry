@@ -258,11 +258,17 @@ app.use('/api/agents/full', async (req, res, next) => {
     req.x402Verified = true;
     next();
   } catch (e) {
-    console.error('Payment verify error:', e.message);
-    // On facilitator timeout/error, fail open with a 402 to be safe
+    console.error('Payment verify error:', e.message, e.stack);
+    // Return detailed error for debugging (strip in production later)
     return res.status(402).json({
       ...PAYMENT_REQUIREMENTS,
-      error: 'facilitator_unavailable'
+      error: 'facilitator_unavailable',
+      debug: {
+        message: e.message,
+        cdpKeyId: cdpKeyId ? cdpKeyId.substring(0, 8) + '...' : 'MISSING',
+        cdpSecret: cdpSecret ? cdpSecret.substring(0, 8) + '...' : 'MISSING',
+        facilitatorUrl
+      }
     });
   }
 });
@@ -427,6 +433,60 @@ app.get('/api/agents/full', async (req, res) => {
       console.error('Settle error (non-fatal):', e.message);
     });
   }
+});
+
+// ─── Debug endpoint (temp) — test CDP auth from within Vercel runtime ─────────
+app.get('/debug/facilitator', async (req, res) => {
+  const result = {
+    cdpKeyId: cdpKeyId ? cdpKeyId.substring(0, 8) + '...' : 'MISSING',
+    cdpSecret: cdpSecret ? cdpSecret.substring(0, 8) + '...' : 'MISSING',
+    facilitatorUrl,
+    jwtTest: null,
+    authMapTest: null,
+    supportedTest: null
+  };
+
+  // Test 1: JWT generation
+  try {
+    const { generateJwt } = require('./node_modules/@coinbase/cdp-sdk/_cjs/auth/utils/jwt.js');
+    const jwt = await generateJwt({
+      apiKeyId: cdpKeyId,
+      apiKeySecret: cdpSecret,
+      requestMethod: 'GET',
+      requestHost: 'api.cdp.coinbase.com',
+      requestPath: '/platform/v2/x402/supported'
+    });
+    result.jwtTest = 'ok — ' + jwt.substring(0, 30) + '...';
+  } catch(e) {
+    result.jwtTest = 'FAILED: ' + e.message;
+  }
+
+  // Test 2: Auth header map
+  try {
+    const map = await buildCdpAuthHeadersMap();
+    result.authMapTest = {
+      hasVerify: !!map.verify?.Authorization,
+      hasSettle: !!map.settle?.Authorization,
+      hasSupported: !!map.supported?.Authorization
+    };
+  } catch(e) {
+    result.authMapTest = 'FAILED: ' + e.message;
+  }
+
+  // Test 3: Hit CDP /supported
+  try {
+    const map = await buildCdpAuthHeadersMap();
+    const resp = await fetch(`${facilitatorUrl}/supported`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json', ...(map.supported || {}) }
+    });
+    const data = await resp.json();
+    result.supportedTest = { status: resp.status, data };
+  } catch(e) {
+    result.supportedTest = 'FAILED: ' + e.message;
+  }
+
+  res.json(result);
 });
 
 // ─── Schema info ──────────────────────────────────────────────────────────────
