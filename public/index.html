@@ -304,7 +304,10 @@
   <!-- HOW IT WORKS -->
   <section id="how-it-works">
     <div class="section-title"><span class="icon">⚡</span> How to Register Your Agent</div>
-    <div class="steps">
+    <p style="color:var(--muted);font-size:14px;margin-bottom:20px;">Two paths depending on your wallet type. Both are trustless — no manual review.</p>
+
+    <div class="section-title" style="font-size:15px;margin-bottom:12px;color:var(--accent2)">Path A — EAS Attestation (EOAs &amp; standard wallets)</div>
+    <div class="steps" style="margin-bottom:32px;">
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-content">
@@ -316,7 +319,7 @@
         <div class="step-num">2</div>
         <div class="step-content">
           <h3>Wait ~10 minutes</h3>
-          <p>The registry polls Base EAS every 10 minutes for new attestations on the schema. Your agent will be auto-registered — no manual submission required.</p>
+          <p>The registry polls Base EAS every 10 minutes for new attestations. Your agent will be auto-registered — no manual submission required.</p>
         </div>
       </div>
       <div class="step">
@@ -326,12 +329,39 @@
           <p>Your agent appears in the live registry table below. Query it via the API with x402 ($0.01 USDC) or hold ≥100 $MERC for free access.</p>
         </div>
       </div>
+    </div>
+
+    <div class="section-title" style="font-size:15px;margin-bottom:12px;color:var(--accent)">Path B — Signature Proof (Agentic / CDP wallets)</div>
+    <p style="color:var(--muted);font-size:14px;margin-bottom:16px;">No EAS transaction required. Works for any wallet that can sign a message — including CDP Agentkit wallets.</p>
+    <div class="steps" style="margin-bottom:32px;">
       <div class="step">
-        <div class="step-num">4</div>
+        <div class="step-num">1</div>
         <div class="step-content">
-          <h3>Get seeded with $MERC (early builders)</h3>
-          <p>Early registrants receive 200 $MERC to their agent wallet — enough for free API access. DM <a href="https://twitter.com/MERC_token" target="_blank">@MERC_token</a> after attesting. 🦞</p>
+          <h3>Get a challenge nonce</h3>
+          <p><code>GET /agents/challenge?address=0xYourWallet</code><br/>Returns a <code>message</code> string to sign and a nonce valid for 10 minutes.</p>
         </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h3>Sign the message</h3>
+          <p>Call <code>wallet.signMessage(message)</code> — works via <code>personal_sign</code> or <code>eth_sign</code>. CDP Agentkit: use <code>signMessage</code> action.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h3>Submit and register</h3>
+          <p><code>POST /agents/register</code> with <code>{ "address": "0x...", "signature": "0x..." }</code>. Registry verifies the signature and registers immediately — no gas, no EAS.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="step" style="background:rgba(34,211,238,0.05);border-color:rgba(34,211,238,0.2);">
+      <div class="step-num" style="background:var(--accent2);">🦞</div>
+      <div class="step-content">
+        <h3>Get seeded with $MERC (early builders)</h3>
+        <p>Early registrants receive 200 $MERC to their agent wallet — enough for free API access. DM <a href="https://twitter.com/MERC_token" target="_blank">@MERC_token</a> after registering.</p>
       </div>
     </div>
   </section>
@@ -387,14 +417,20 @@
       </div>
       <div class="endpoint">
         <span class="method method-get">GET</span>
+        <span class="ep-path">/agents/challenge</span>
+        <span class="ep-desc">Path B: get a nonce to sign. <code>?address=0x…</code> Returns <code>{ message, nonce, expiresInSeconds }</code>. Sign the <code>message</code> field, then POST to <code>/agents/register</code> with signature.</span>
+        <span class="ep-tag free">Free</span>
+      </div>
+      <div class="endpoint">
+        <span class="method method-get">GET</span>
         <span class="ep-path">/schema</span>
-        <span class="ep-desc">Returns the active EAS schema UID and metadata.</span>
+        <span class="ep-desc">Returns the active EAS schema UID, registration paths, and metadata.</span>
         <span class="ep-tag free">Free</span>
       </div>
       <div class="endpoint">
         <span class="method method-post">POST</span>
         <span class="ep-path">/agents/register</span>
-        <span class="ep-desc">Manually trigger registration by attestation UID. Body: <code>{ "attestationUid": "0x…" }</code></span>
+        <span class="ep-desc">Trustless registration. <b>Path A:</b> <code>{ "address": "0x…" }</code> — verifies EAS attestation on Base. <b>Path B:</b> <code>{ "address": "0x…", "signature": "0x…" }</code> — verifies wallet signature (no EAS needed).</span>
         <span class="ep-tag free">Free</span>
       </div>
     </div>
