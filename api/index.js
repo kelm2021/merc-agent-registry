@@ -284,6 +284,12 @@ function loadRegistry() {
       attestationUid: '0xa5786bfdd05554faf80d255a064565c97ef58b53963e3a9df0313be0edf6c258',
       registeredAt: '2026-03-12T13:17:34.000Z',
       agentNumber: 1
+    },
+    {
+      address: '0xEa8F59B504F18Ac7ed25C735f07864ae2EeFa493',
+      attestationUid: '0x7893e2ca7727aa356d7da6c33df2cc2cec386abbf33be0b60e7d02b251a75d50',
+      registeredAt: '2026-03-12T13:34:00.000Z',
+      agentNumber: 2
     }
   ];
 }
