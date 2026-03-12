@@ -29,7 +29,7 @@ const CANONICAL_PAID_URL = 'https://merc-agent-registry-lake.vercel.app/api/agen
 
 // ─── CDP JWT auth helper ──────────────────────────────────────────────────────
 function makeCdpAuthHeaders(method, path) {
-  const { generateJwt } = require('./node_modules/@coinbase/cdp-sdk/_cjs/auth/utils/jwt.js');
+  const { generateJwt } = require('@coinbase/cdp-sdk/auth');
   const keyId = process.env.CDP_API_KEY_ID;
   const keySecret = process.env.CDP_API_SECRET;
   if (!keyId || !keySecret) return () => Promise.resolve({});
@@ -57,7 +57,7 @@ const facilitatorUrl = cdpKeyId
 async function buildCdpAuthHeadersMap() {
   if (!cdpKeyId || !cdpSecret) return {};
   try {
-    const { generateJwt } = require('./node_modules/@coinbase/cdp-sdk/_cjs/auth/utils/jwt.js');
+    const { generateJwt } = require('@coinbase/cdp-sdk/auth');
     const paths = [
       { key: 'verify',    method: 'POST', path: '/platform/v2/x402/verify' },
       { key: 'settle',    method: 'POST', path: '/platform/v2/x402/settle' },
@@ -448,7 +448,7 @@ app.get('/debug/facilitator', async (req, res) => {
 
   // Test 1: JWT generation
   try {
-    const { generateJwt } = require('./node_modules/@coinbase/cdp-sdk/_cjs/auth/utils/jwt.js');
+    const { generateJwt } = require('@coinbase/cdp-sdk/auth');
     const jwt = await generateJwt({
       apiKeyId: cdpKeyId,
       apiKeySecret: cdpSecret,
