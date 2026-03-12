@@ -455,17 +455,26 @@ app.get('/debug/facilitator', async (req, res) => {
     result.authMapTest = 'FAILED: ' + e.message;
   }
 
-  // Test 3: Hit CDP /supported
-  try {
-    const map = await buildCdpAuthHeadersMap();
-    const resp = await fetch(`${facilitatorUrl}/supported`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json', ...(map.supported || {}) }
-    });
-    const data = await resp.json();
-    result.supportedTest = { status: resp.status, data };
-  } catch(e) {
-    result.supportedTest = 'FAILED: ' + e.message;
+  // Test 3: Try multiple CDP endpoint variations
+  const variations = [
+    { name: 'base-x402', url: 'https://api.cdp.coinbase.com/platform/v2/x402', jwtPath: '/platform/v2/x402/supported' },
+    { name: 'facilitator-suffix', url: 'https://api.cdp.coinbase.com/platform/v2/x402/facilitator', jwtPath: '/platform/v2/x402/facilitator/supported' },
+  ];
+  result.endpointTests = {};
+  for (const v of variations) {
+    try {
+      const jwt = await generateCdpJwt('GET', v.jwtPath);
+      const resp = await fetch(`${v.url}/supported`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + jwt }
+      });
+      const text = await resp.text();
+      let data;
+      try { data = JSON.parse(text); } catch(e) { data = text.substring(0, 100); }
+      result.endpointTests[v.name] = { status: resp.status, data };
+    } catch(e) {
+      result.endpointTests[v.name] = 'FAILED: ' + e.message;
+    }
   }
 
   res.json(result);
