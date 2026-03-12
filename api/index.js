@@ -383,6 +383,41 @@ app.get('/agents/merc', async (req, res) => {
   });
 });
 
+// ─── Route: GET /agents/challenge ─────────────────────────────────────────────
+// Path B: Returns a nonce for the given address to sign.
+// MUST be declared before /agents/:address wildcard route.
+// The agent signs the nonce with their wallet, then submits to POST /agents/register
+// with { address, signature }.
+app.get('/agents/challenge', (req, res) => {
+  const { address } = req.query;
+  if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    return res.status(400).json({ error: 'Pass ?address=0x...' });
+  }
+
+  // Already registered?
+  const existing = agentRegistry.find(a => a.address.toLowerCase() === address.toLowerCase());
+  if (existing) {
+    return res.json({
+      message: 'Already registered',
+      agent: {
+        address: existing.address,
+        attestationUid: existing.attestationUid,
+        registeredAt: existing.registeredAt,
+        agentNumber: existing.agentNumber
+      }
+    });
+  }
+
+  const nonce = issueNonce(address);
+  res.json({
+    address,
+    nonce,
+    message: `MERC Agent Registry: prove ownership of ${address} — nonce: ${nonce}`,
+    instructions: 'Sign the message field with your wallet (personal_sign / eth_sign), then POST /agents/register with { address, signature }',
+    expiresInSeconds: NONCE_TTL_MS / 1000
+  });
+});
+
 // ─── Route: Single agent lookup ───────────────────────────────────────────────
 app.get('/agents/:address', async (req, res) => {
   const addr = req.params.address.toLowerCase();
@@ -437,40 +472,6 @@ async function lookupEasAttestation(address) {
     return null;
   }
 }
-
-// ─── Route: GET /agents/challenge ─────────────────────────────────────────────
-// Path B: Returns a nonce for the given address to sign.
-// The agent signs the nonce with their wallet, then submits to POST /agents/register
-// with { address, signature }.
-app.get('/agents/challenge', (req, res) => {
-  const { address } = req.query;
-  if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
-    return res.status(400).json({ error: 'Pass ?address=0x...' });
-  }
-
-  // Already registered?
-  const existing = agentRegistry.find(a => a.address.toLowerCase() === address.toLowerCase());
-  if (existing) {
-    return res.json({
-      message: 'Already registered',
-      agent: {
-        address: existing.address,
-        attestationUid: existing.attestationUid,
-        registeredAt: existing.registeredAt,
-        agentNumber: existing.agentNumber
-      }
-    });
-  }
-
-  const nonce = issueNonce(address);
-  res.json({
-    address,
-    nonce,
-    message: `MERC Agent Registry: prove ownership of ${address} — nonce: ${nonce}`,
-    instructions: 'Sign the message field with your wallet (personal_sign / eth_sign), then POST /agents/register with { address, signature }',
-    expiresInSeconds: NONCE_TTL_MS / 1000
-  });
-});
 
 // ─── Route: POST /agents/register ────────────────────────────────────────────
 // Dual-path trustless registration:
