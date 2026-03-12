@@ -278,20 +278,18 @@ app.use('/api/agents/full', async (req, res, next) => {
 let agentRegistry = loadRegistry();
 
 function loadRegistry() {
-  // NOTE: Botti entry removed — Jake has not authorized inclusion. Re-add when Jake confirms.
-  // Attestation UIDs in this seed data are placeholder/fabricated — not real on-chain attestations.
   return [
     {
-      address: '0xEa8F59B504F18Ac7ed25C735f07864ae2EeFa493',
-      agentName: 'ClawOps',
-      agentType: 'Operations & Analytics',
-      modelProvider: 'Anthropic Claude',
-      operatorHandle: 'LMercdigital',
-      githubOrTwitter: '@lmercdigital',
-      attestationUid: null, // EAS schema not yet deployed — placeholder only
-      registeredAt: '2026-03-11T00:09:00.000Z',
-      mercBalance: 0,
+      address: '0xEaAE848fbD8F88874F5660E3F615a1430EEE5880',
+      attestationUid: '0xbb72046bca7f3ff34bfdf49d12e8bcfe3e0381029a8fcdebad2b899a3fe9fa96',
+      registeredAt: '2026-03-10T22:49:00.000Z',
       agentNumber: 1
+    },
+    {
+      address: '0xEa8F59B504F18Ac7ed25C735f07864ae2EeFa493',
+      attestationUid: '0xc925561d4caee32551ea47a640c3dc4e4cdcc5960bdbcbc62f285d9664f48346',
+      registeredAt: '2026-03-11T00:09:00.000Z',
+      agentNumber: 2
     }
   ];
 }
@@ -411,10 +409,8 @@ app.get('/api/agents/full', async (req, res) => {
     try {
       const settleResult = await settleCdpPayment(req.x402PaymentHeader);
       // CDP settle result shape: { success, transaction: { hash, ... } }
-      settleTxHash = settleResult?.transaction?.hash
-        || settleResult?.txHash
-        || settleResult?.hash
-        || null;
+      // CDP settle response: { success: true, transaction: "0x..." }
+      settleTxHash = settleResult?.transaction || settleResult?.txHash || settleResult?.hash || null;
       if (settleTxHash) {
         console.log('Settled tx:', settleTxHash);
       }
