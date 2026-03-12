@@ -28,21 +28,17 @@ const BASE_MAINNET = 'eip155:8453';
 const CANONICAL_PAID_URL = 'https://merc-agent-registry-lake.vercel.app/api/agents/full';
 
 // ─── CDP JWT auth helper ──────────────────────────────────────────────────────
-function makeCdpAuthHeaders(method, path) {
-  const { generateJwt } = require('@coinbase/cdp-sdk/auth');
-  const keyId = process.env.CDP_API_KEY_ID;
-  const keySecret = process.env.CDP_API_SECRET;
-  if (!keyId || !keySecret) return () => Promise.resolve({});
-  return async () => {
-    const jwt = await generateJwt({
-      apiKeyId: keyId,
-      apiKeySecret: keySecret,
-      requestMethod: method,
-      requestHost: 'api.cdp.coinbase.com',
-      requestPath: path
-    });
-    return { Authorization: 'Bearer ' + jwt };
-  };
+// @coinbase/cdp-sdk uses jose (ESM-only) internally, so we must use dynamic import()
+// instead of require() — dynamic import works in both CJS and ESM contexts
+async function generateCdpJwt(method, requestPath) {
+  const { generateJwt } = await import('@coinbase/cdp-sdk/auth');
+  return generateJwt({
+    apiKeyId: cdpKeyId,
+    apiKeySecret: cdpSecret,
+    requestMethod: method,
+    requestHost: 'api.cdp.coinbase.com',
+    requestPath
+  });
 }
 
 // ─── x402 Resource Server with Bazaar extension ───────────────────────────────
@@ -57,7 +53,6 @@ const facilitatorUrl = cdpKeyId
 async function buildCdpAuthHeadersMap() {
   if (!cdpKeyId || !cdpSecret) return {};
   try {
-    const { generateJwt } = require('@coinbase/cdp-sdk/auth');
     const paths = [
       { key: 'verify',    method: 'POST', path: '/platform/v2/x402/verify' },
       { key: 'settle',    method: 'POST', path: '/platform/v2/x402/settle' },
@@ -65,13 +60,7 @@ async function buildCdpAuthHeadersMap() {
     ];
     const result = {};
     await Promise.all(paths.map(async ({ key, method, path }) => {
-      const jwt = await generateJwt({
-        apiKeyId: cdpKeyId,
-        apiKeySecret: cdpSecret,
-        requestMethod: method,
-        requestHost: 'api.cdp.coinbase.com',
-        requestPath: path
-      });
+      const jwt = await generateCdpJwt(method, path);
       result[key] = { Authorization: 'Bearer ' + jwt };
     }));
     return result;
@@ -448,14 +437,7 @@ app.get('/debug/facilitator', async (req, res) => {
 
   // Test 1: JWT generation
   try {
-    const { generateJwt } = require('@coinbase/cdp-sdk/auth');
-    const jwt = await generateJwt({
-      apiKeyId: cdpKeyId,
-      apiKeySecret: cdpSecret,
-      requestMethod: 'GET',
-      requestHost: 'api.cdp.coinbase.com',
-      requestPath: '/platform/v2/x402/supported'
-    });
+    const jwt = await generateCdpJwt('GET', '/platform/v2/x402/supported');
     result.jwtTest = 'ok — ' + jwt.substring(0, 30) + '...';
   } catch(e) {
     result.jwtTest = 'FAILED: ' + e.message;
