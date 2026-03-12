@@ -405,21 +405,40 @@ app.get('/api/agents/full', async (req, res) => {
     agentNumber: a.agentNumber
   }));
 
-  res.json({
+  // Settle before responding so we can include the tx hash
+  let settleTxHash = null;
+  if (req.x402PaymentHeader && req.x402Verified) {
+    try {
+      const settleResult = await settleCdpPayment(req.x402PaymentHeader);
+      // CDP settle result shape: { success, transaction: { hash, ... } }
+      settleTxHash = settleResult?.transaction?.hash
+        || settleResult?.txHash
+        || settleResult?.hash
+        || null;
+      if (settleTxHash) {
+        console.log('Settled tx:', settleTxHash);
+      }
+    } catch(e) {
+      console.error('Settle error (non-fatal):', e.message);
+    }
+  }
+
+  const responseBody = {
     count: agents.length,
     total: agents.length,
     paid: true,
     schemaUid: EAS_SCHEMA_UID,
     easExplorer: `https://base.easscan.org/schema/view/${EAS_SCHEMA_UID}`,
     agents
-  });
+  };
 
-  // Fire-and-forget settle after response is sent
-  if (req.x402PaymentHeader && req.x402Verified) {
-    settleCdpPayment(req.x402PaymentHeader).catch(e => {
-      console.error('Settle error (non-fatal):', e.message);
-    });
+  if (settleTxHash) {
+    responseBody.settleTxHash = settleTxHash;
+    responseBody.settleExplorer = `https://basescan.org/tx/${settleTxHash}`;
+    res.setHeader('X-Settle-Tx', settleTxHash);
   }
+
+  res.json(responseBody);
 });
 
 // ─── Schema info ──────────────────────────────────────────────────────────────
