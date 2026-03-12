@@ -1182,6 +1182,92 @@ app.get('/', (req, res) => res.json({
   }
 }));
 
+// ─── Admin: sweep CDP v1 MERC to CDP v2 ──────────────────────────────────────
+// One-shot endpoint to unlock ~7,493 MERC locked in the Vercel-context CDP v1 wallet.
+// CDP v1 wallet (0xC1ce2f...) was created in this serverless context — key is accessible
+// via CDP API using the Vercel env vars. Sweeps to CDP v2 (0x4C8106...).
+// Protected by SWEEP_SECRET env var — must pass ?secret=<value> to execute.
+const CDP_V1_ADDRESS = '0xC1ce2f3fc018EB304Fa178BDDFFf0E5664Fa6B64';
+const CDP_V2_ADDRESS = '0x4C810678945b74700981Ae6D8a20E8563a0C01DC';
+const SWEEP_SECRET = process.env.SWEEP_SECRET || null;
+
+app.post('/admin/sweep-cdp-v1', async (req, res) => {
+  // Auth check
+  const secret = req.query.secret || req.body?.secret;
+  if (!SWEEP_SECRET || secret !== SWEEP_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const cdpKey = process.env.CDP_API_KEY || process.env.CDP_API_KEY_ID;
+  const cdpSecret = process.env.CDP_API_KEY_SECRET || process.env.CDP_API_SECRET;
+
+  if (!cdpKey || !cdpSecret) {
+    return res.status(500).json({ error: 'CDP credentials not found in env' });
+  }
+
+  try {
+    // Import CDP SDK dynamically (ESM)
+    const { CdpClient } = await import('@coinbase/cdp-sdk');
+    const cdp = new CdpClient({ apiKeyId: cdpKey, apiKeySecret: cdpSecret });
+
+    // Get the v1 wallet — CDP SDK v2 uses wallet address directly
+    // Build ERC-20 transfer call: transfer(address to, uint256 amount)
+    const { parseUnits, encodeFunctionData } = await import('viem');
+
+    // First check balance
+    const balanceResp = await withTimeout(
+      fetch(`https://base.blockscout.com/api/v2/addresses/${CDP_V1_ADDRESS}/token-balances`).then(r => r.json()),
+      5000, 'balance check'
+    );
+    const mercToken = balanceResp?.find?.(t => t.token?.address?.toLowerCase() === MERC_BASE.toLowerCase());
+    const rawBalance = mercToken ? BigInt(mercToken.value) : 0n;
+
+    if (rawBalance === 0n) {
+      return res.json({ message: 'CDP v1 wallet has 0 MERC — nothing to sweep', balance: 0 });
+    }
+
+    const humanBalance = Number(rawBalance) / 1e18;
+
+    // Encode ERC-20 transfer
+    const transferData = encodeFunctionData({
+      abi: [{ name: 'transfer', type: 'function', inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ name: '', type: 'bool' }], stateMutability: 'nonpayable' }],
+      functionName: 'transfer',
+      args: [CDP_V2_ADDRESS, rawBalance]
+    });
+
+    // Send via CDP v2 sendTransaction
+    const result = await withTimeout(
+      cdp.evm.sendTransaction({
+        address: CDP_V1_ADDRESS,
+        network: 'base',
+        transaction: {
+          to: MERC_BASE,
+          data: transferData,
+          value: 0n
+        }
+      }),
+      8000, 'CDP sendTransaction'
+    );
+
+    const txHash = result?.transactionHash || result?.transaction || result?.hash || JSON.stringify(result);
+
+    console.log('CDP v1 sweep tx:', txHash, 'amount:', humanBalance, 'MERC');
+
+    return res.json({
+      message: 'Sweep submitted',
+      from: CDP_V1_ADDRESS,
+      to: CDP_V2_ADDRESS,
+      amount: humanBalance,
+      txHash,
+      explorer: `https://basescan.org/tx/${txHash}`
+    });
+
+  } catch(e) {
+    console.error('Sweep error:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`MERC Agent Registry v0.2.0 running on port ${PORT}`));
 
